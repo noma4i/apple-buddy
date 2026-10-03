@@ -1,0 +1,17 @@
+.build/
+.swiftpm/
+.DS_Store
+xcuserdata/
+*.xcuserstate
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.db
+*.log
+.env
+.env.*
+*.p12
+*.mobileprovision
+*.provisionprofile
+/exports/
+/backups/

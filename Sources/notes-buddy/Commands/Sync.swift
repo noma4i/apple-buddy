@@ -1,0 +1,94 @@
+import AppKit
+import ArgumentParser
+import Foundation
+import NotesNative
+
+func requestNotesSync() throws -> NSRunningApplication {
+    guard let application = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.Notes") else { throw NotesError(description: "Notes application not found, local changes remain saved") }
+    try quitNotes(NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.Notes"))
+    var configurationError: NSError?
+    guard let configuration = NBNotesBackgroundConfiguration(&configurationError) else {
+        throw configurationError ?? NotesError(description: "Background Notes launch is unavailable, local changes remain saved")
+    }
+    var completed = false
+    var failure: Error?
+    var launchedApplication: NSRunningApplication?
+    NSWorkspace.shared.openApplication(at: application, configuration: configuration) { app, error in
+        failure = error
+        launchedApplication = app
+        if app == nil && error == nil { failure = NotesError(description: "Notes did not start") }
+        completed = true
+    }
+    let deadline = Date().addingTimeInterval(10)
+    while !completed && Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.05)) }
+    guard completed else { throw NotesError(description: "Notes sync launch timed out, local changes remain saved") }
+    if let failure { throw NotesError(description: "Notes sync launch failed, local changes remain saved: \(failure)") }
+    guard let launchedApplication else { throw NotesError(description: "Notes did not start, local changes remain saved") }
+    while !launchedApplication.isFinishedLaunching && Date() < deadline && !launchedApplication.isTerminated {
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+    }
+    guard launchedApplication.isFinishedLaunching && launchedApplication.activationPolicy == .prohibited else {
+        try quitNotes([launchedApplication])
+        throw NotesError(description: "Notes did not start as a background-only process, local changes remain saved")
+    }
+    return launchedApplication
+}
+
+func synchronizeNotes() throws -> [AnyHashable: Any] {
+    var signalError: NSError?
+    guard NBStartNotesSyncSignals(&signalError) else {
+        throw signalError ?? NotesError(description: "Cannot register Notes sync interruption signals")
+    }
+    defer { NBStopNotesSyncSignals() }
+    let application = try requestNotesSync()
+    let result = Result { try waitForNotesSync(application) }
+    do { try quitNotes([application]) }
+    catch {
+        if case .failure(let syncError) = result {
+            FileHandle.standardError.write(Data("Notes shutdown failed: \(error)\n".utf8))
+            throw syncError
+        }
+        throw error
+    }
+    return try result.get()
+}
+
+func waitForNotesSync(_ application: NSRunningApplication) throws -> [AnyHashable: Any] {
+    let deadline = Date().addingTimeInterval(120)
+    while true {
+        let interruption = NBNotesSyncInterruption()
+        guard interruption == 0 else { throw NotesError(description: "Notes sync interrupted by signal \(interruption), local changes remain saved and queued") }
+        guard !application.isTerminated else { throw NotesError(description: "Notes stopped before cloud acknowledgement, local changes remain saved and queued") }
+        let state = try autoreleasepool { try openLocalNotes(readOnly: true).cloudStatus() }
+        guard let pending = state["pendingObjects"] as? Int else { throw NotesError(description: "Cannot read cloud acknowledgement status, local changes remain saved") }
+        if pending == 0 { return state }
+        if Date() >= deadline { throw NotesError(description: "Cloud acknowledgement timed out after 120 seconds, local changes remain saved and queued") }
+        FileHandle.standardError.write(Data("Pending cloud objects: \(pending)\n".utf8))
+        RunLoop.current.run(until: Date().addingTimeInterval(2))
+    }
+}
+
+struct Sync: ParsableCommand {
+    static let configuration = CommandConfiguration(abstract: "Start Notes background synchronization or read CloudKit acknowledgement status", discussion: """
+        Uses native macOS application launch APIs, never AppleScript or UI scripting.
+        Notes runs background-only, without windows, Dock icon or activation, to upload queued changes.
+        Every saved CLI write starts Notes and waits for iCloud acknowledgement without extra flags.
+        During bulk import Notes stays closed. Each note is saved to its durable upload queue.
+        Launch completion means sync was requested, not that iCloud acknowledged the data.
+        --status reads private Notes cloud-state APIs without launching or quitting Notes.
+        Synchronization waits for an empty upload queue and fails after 120 seconds.
+        A timeout exits nonzero. Local changes remain saved and queued for upload.
+        Writes quit Notes before editing. Sync quits Notes after waiting, including on error.
+        Ctrl-C, SIGTERM and SIGHUP stop synchronization and quit Notes with a nonzero CLI exit.
+
+        EXAMPLES
+          notes-buddy sync
+          notes-buddy sync --status
+        """)
+    @Flag(help: "Read cloud-state counters without starting Notes") var status = false
+
+    func run() throws {
+        if status { try printDictionary(openLocalNotes(readOnly: true).cloudStatus()); return }
+        try printDictionary(synchronizeNotes())
+    }
+}
