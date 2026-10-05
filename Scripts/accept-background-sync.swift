@@ -8,6 +8,8 @@ do {
         throw NSError(domain: "accept-sync", code: 1, userInfo: [NSLocalizedDescriptionKey: "Notes must be closed before acceptance"])
     }
     let process = Process()
+    let usage = NSError(domain: "accept-sync", code: 8, userInfo: [NSLocalizedDescriptionKey: "Usage: accept-background-sync [--interrupt=SIGNAL] NB_PATH [NB_ARGUMENTS]"])
+    guard CommandLine.arguments.count > 1 else { throw usage }
     let interruptionArgument = CommandLine.arguments[1]
     let interrupted = interruptionArgument == "--interrupt" || interruptionArgument.hasPrefix("--interrupt=")
     let signalNumber = interruptionArgument == "--interrupt" ? SIGTERM : Int32(interruptionArgument.split(separator: "=").last ?? "")
@@ -15,18 +17,26 @@ do {
         throw NSError(domain: "accept-sync", code: 6, userInfo: [NSLocalizedDescriptionKey: "Only SIGINT, SIGTERM and SIGHUP are accepted"])
     }
     let argumentIndex = interrupted ? 2 : 1
+    guard CommandLine.arguments.count > argumentIndex else { throw usage }
     process.executableURL = URL(fileURLWithPath: CommandLine.arguments[argumentIndex])
     process.arguments = Array(CommandLine.arguments.dropFirst(argumentIndex + 1))
     let output = Pipe()
     process.standardOutput = output
     process.standardError = output
+    var captured = Data()
+    let reading = DispatchGroup()
+    reading.enter()
+    DispatchQueue.global().async {
+        captured = output.fileHandleForReading.readDataToEndOfFile()
+        reading.leave()
+    }
     try process.run()
     var sawNotes = false
     var activatedNotes = false
     var foregroundWorker = false
     var visibleWindows = 0
     var signalSent = false
-    let deadline = Date().addingTimeInterval(140)
+    let deadline = Date().addingTimeInterval(160)
     while process.isRunning && Date() < deadline {
         if let app = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.Notes").first {
             if !sawNotes { print("Notes worker observed: hidden=\(app.isHidden), policy=\(app.activationPolicy.rawValue)") }
@@ -49,7 +59,8 @@ do {
         throw NSError(domain: "accept-sync", code: 2, userInfo: [NSLocalizedDescriptionKey: "CLI exceeded acceptance deadline"])
     }
     process.waitUntilExit()
-    print(String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self))
+    reading.wait()
+    print(String(decoding: captured, as: UTF8.self))
     let count = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.Notes").count
     print("CLI exit: \(process.terminationStatus), Notes observed: \(sawNotes), activated: \(activatedNotes), foreground worker: \(foregroundWorker), visible windows: \(visibleWindows), Notes after exit: \(count)")
     let expectedExit = interrupted ? process.terminationStatus != 0 && signalSent : process.terminationStatus == 0
