@@ -1,7 +1,7 @@
 class Nb < Formula
   desc "Read, search, edit and organize Apple Notes"
   homepage "https://github.com/noma4i/notes-buddy"
-  url "https://github.com/noma4i/notes-buddy.git", revision: "d51f5c9559b19e60303cf68d4655e523a69ea6b3"
+  url "https://github.com/noma4i/notes-buddy.git", revision: "0a6246b535dc8e846263b997c0a5342134c7e143"
   version "1.0.0"
 
   depends_on :macos
