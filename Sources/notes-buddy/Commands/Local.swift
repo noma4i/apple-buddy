@@ -4,7 +4,7 @@ import Foundation
 import NotesNative
 
 struct LocalNoteOptions: ParsableArguments {
-    @Argument(help: "Note UUID or unique prefix from ls, search or new") var id: String
+    @Argument(help: ReferenceHelp.note) var id: String
 
     func open(readOnly: Bool) throws -> NBNotes {
         try openLocalNotes(readOnly: readOnly)
@@ -99,8 +99,8 @@ struct Tags: ParsableCommand {
     @OptionGroup var output: OutputOptions
     static let configuration = CommandConfiguration(abstract: "List, add or remove native tags on a note", discussion: "Without --add or --remove, lists tags. Add --json for structured data. Separate names with slashes, commas or whitespace. Each name becomes a distinct native tag, not text. Duplicates are ignored. Invalid names reject the whole batch. --remove uses the same separators and affects only this note. Search with ls --tag. Example: nb tags <id> --add 'invoices/tech,other'")
     @OptionGroup var note: LocalNoteOptions
-    @Option(help: "Native tags to add, separated by slash, comma or whitespace") var add: String?
-    @Option(help: "Native tags to remove, separated by slash, comma or whitespace") var remove: String?
+    @Option(help: ArgumentHelp("Native tags to add, \(ReferenceHelp.tag), separated by slash, comma or whitespace")) var add: String?
+    @Option(help: ArgumentHelp("Native tags to remove, \(ReferenceHelp.tag), separated by slash, comma or whitespace")) var remove: String?
 
     func run() throws {
         guard add == nil || remove == nil else { throw ValidationError("choose either --add or --remove") }
@@ -136,10 +136,10 @@ struct Attachments: ParsableCommand {
     @Argument(help: "ls, export, add, rm, replace, mv, view") var action: Action
     @OptionGroup var note: LocalNoteOptions
     @OptionGroup var position: PositionOptions
-    @Option(help: "Attachment UUID or unique prefix from show or attachments ls") var attachment: String?
+    @Option(help: ReferenceHelp.attachment) var attachment: String?
     @Option(help: "Input file for add or replace, output file for export") var file: String?
     @Option(help: "Export all files, or the selected attachment, into this directory") var directory: String?
-    @Option(help: "Destination note UUID or unique prefix for mv") var to: String?
+    @Option(help: "Destination note for mv, same forms as the note argument") var to: String?
     @Option(help: "Notes view size: 0 (default), 1 or 2") var size: Int?
 
     func validate() throws {
@@ -169,7 +169,7 @@ struct Attachments: ParsableCommand {
                 throw NotesError(description: "Notes returned invalid attachments")
             }
             var command = self
-            if let attachment { command.attachment = try store.canonicalID(forReference: attachment, entity: "ICAttachment") }
+            if let attachment { command.attachment = try store.attachmentID(forReference: attachment, note: note.id) }
             let files = try command.exportFiles(items)
             if file != nil, let saved = files.first {
                 try output.write(["path": saved["path"]!, "id": owner, "attachment": saved["attachment"]!], text: saved["path"]!)
@@ -261,7 +261,7 @@ struct Links: ParsableCommand {
     @Argument(help: "ls, add or rm") var action: Action
     @OptionGroup var note: LocalNoteOptions
     @OptionGroup var position: PositionOptions
-    @Option(help: "Target note UUID or unique prefix for add") var to: String?
+    @Option(help: "Target note for add, same forms as the note argument") var to: String?
     @Option(help: "Link UUID or unique prefix from links ls, required for rm") var link: String?
 
     func validate() throws {
@@ -309,7 +309,7 @@ struct Search: ParsableCommand {
         """)
     @Argument(help: "Nonempty text or id fragment to find") var query: String
     @Option(help: "all, id, title, text, attachment, tag, link or document") var field: Field = .all
-    @Option(help: "Exact folder name or folder UUID or unique prefix") var folder: String?
+    @Option(help: ArgumentHelp("Only notes of this folder, by \(ReferenceHelp.folder)")) var folder: String?
     @Option(help: "Maximum number of results") var limit = 50
     @Option(help: "Skip this many results") var offset = 0
 

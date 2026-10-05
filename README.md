@@ -130,7 +130,11 @@ nb attachments export help
 | Sync or check status | `sync`, `sync --status` |
 | Connect agents | `mcp` |
 
-Folder selectors accept a name or ID. Use IDs for ambiguous names.
+Every reference that `nb` prints is accepted as input.
+A note is selected by UUID, unique prefix or its `applenotes://` URL.
+A folder is selected by UUID, unique prefix, path such as `Work/Project` or name. Names and paths ignore case.
+An exact path wins over a name. Use a path or UUID when several folders share a name.
+An attachment is selected by UUID, unique prefix or file name. A tag is written with or without `#`.
 Actions reject options that they do not use. For example, `attachments ls` does not accept `--file`.
 Moves preserve note IDs and contents. `rm` moves notes to Recently Deleted.
 `rmfolder` accepts only empty folders without subfolders.

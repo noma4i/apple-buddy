@@ -22,7 +22,7 @@ struct Folders: ParsableCommand {
 
 struct Stats: ParsableCommand {
     @OptionGroup var output: OutputOptions
-    @Option(help: "Folder name, UUID or unique prefix, include its descendants") var folder: String?
+    @Option(help: ArgumentHelp("Only this folder and its subfolders, by \(ReferenceHelp.folder)")) var folder: String?
     static let configuration = CommandConfiguration(
         abstract: "Show note counts and folder organization",
         discussion: "Shows active and deleted note counts separately. Folder counts are direct, not recursive. Empty includes notes and subfolders. Example: nb stats --folder Work --json"
@@ -67,8 +67,8 @@ struct List: ParsableCommand {
         """
     )
 
-    @Option(help: "Only notes of this folder, by name, UUID or unique prefix") var folder: String?
-    @Option(help: "Only notes with this native tag") var tag: String?
+    @Option(help: ArgumentHelp("Only notes of this folder, by \(ReferenceHelp.folder)")) var folder: String?
+    @Option(help: ArgumentHelp("Only notes with exactly this native tag, \(ReferenceHelp.tag)")) var tag: String?
 
     func run() throws {
         let folders = try folder.map { [try resolveFolder(named: $0)] } ?? listFolders()
@@ -99,7 +99,7 @@ struct Show: ParsableCommand {
         """
     )
 
-    @Argument(help: "Note UUID or unique prefix from ls, search or new") var id: String
+    @Argument(help: ReferenceHelp.note) var id: String
     @Flag(help: "Print the HTML body instead of plain text") var html = false
 
     func run() throws {

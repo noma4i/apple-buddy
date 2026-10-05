@@ -16,7 +16,7 @@ struct New: ParsableCommand {
         """
     )
 
-    @Option(help: "Existing folder name, UUID or unique prefix") var folder: String
+    @Option(help: ArgumentHelp("Existing folder, by \(ReferenceHelp.folder)")) var folder: String
     @Option(help: "Title, placed above the body as a heading") var title: String?
     @Option(help: "HTML body file, - for stdin") var html: String?
 
@@ -41,7 +41,7 @@ struct Remove: ParsableCommand {
         """
     )
 
-    @Argument(help: "Note UUID or unique prefix from ls, search or new") var id: String
+    @Argument(help: ReferenceHelp.note) var id: String
 
     func run() throws {
         try openLocalNotes(readOnly: false).deleteNote(id)
@@ -62,8 +62,8 @@ struct Move: ParsableCommand {
         """
     )
 
-    @Argument(help: "Note UUID or unique prefix from ls, search or new") var id: String
-    @Option(help: "Target folder name, UUID or unique prefix") var folder: String
+    @Argument(help: ReferenceHelp.note) var id: String
+    @Option(help: ArgumentHelp("Target folder, by \(ReferenceHelp.folder)")) var folder: String
 
     func run() throws {
         try openLocalNotes(readOnly: false).moveNote(id, toFolder: folder)
@@ -126,7 +126,7 @@ struct Append: ParsableCommand {
         """
     )
 
-    @Argument(help: "Note UUID or unique prefix from ls, search or new") var id: String
+    @Argument(help: ReferenceHelp.note) var id: String
     @Option(help: "HTML file, - for stdin") var html: String
 
     func run() throws {
@@ -150,7 +150,7 @@ struct Replace: ParsableCommand {
         """
     )
 
-    @Argument(help: "Note UUID or unique prefix from ls, search or new") var id: String
+    @Argument(help: ReferenceHelp.note) var id: String
     @Option(help: "Fragment to find, matched against the HTML body") var find: String
     @Option(name: .customLong("with"), help: "Replacement HTML") var replacement: String
     @Flag(help: "Replace every occurrence, otherwise the fragment must occur once") var all = false
@@ -180,7 +180,7 @@ struct Attach: ParsableCommand {
         """
     )
 
-    @Argument(help: "Note UUID or unique prefix from ls, search or new") var id: String
+    @Argument(help: ReferenceHelp.note) var id: String
     @Argument(help: "Path of the file to attach") var file: String
 
     func run() throws {

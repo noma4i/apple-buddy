@@ -44,7 +44,7 @@ struct TableList: ParsableCommand {
         """
     )
 
-    @Argument(help: "Note UUID or unique prefix from ls, search or new") var id: String
+    @Argument(help: ReferenceHelp.note) var id: String
 
     func run() throws {
         let result = try openLocalNotes(readOnly: true).readNote(id)
@@ -72,7 +72,7 @@ struct TableNew: ParsableCommand {
         """
     )
 
-    @Argument(help: "Note UUID or unique prefix from ls, search or new") var id: String
+    @Argument(help: ReferenceHelp.note) var id: String
     @Option(help: "CSV file, - for stdin") var csv: String?
     @Option(help: "Empty table size as ROWSxCOLUMNS, for example 3x2") var size: String?
 
@@ -106,7 +106,7 @@ struct TableSet: ParsableCommand {
         """
     )
 
-    @Argument(help: "Note UUID or unique prefix from ls, search or new") var id: String
+    @Argument(help: ReferenceHelp.note) var id: String
     @OptionGroup var table: TableOption
     @Option(help: "Row number") var row: Int
     @Option(help: "Column number") var col: Int
@@ -130,7 +130,7 @@ struct TableAddRow: ParsableCommand {
         """
     )
 
-    @Argument(help: "Note UUID or unique prefix from ls, search or new") var id: String
+    @Argument(help: ReferenceHelp.note) var id: String
     @OptionGroup var table: TableOption
     @Option(help: "Position of the new row") var at: Int?
 
@@ -152,7 +152,7 @@ struct TableRemoveRow: ParsableCommand {
         """
     )
 
-    @Argument(help: "Note UUID or unique prefix from ls, search or new") var id: String
+    @Argument(help: ReferenceHelp.note) var id: String
     @OptionGroup var table: TableOption
     @Option(help: "Row number to delete") var row: Int
 
@@ -174,7 +174,7 @@ struct TableAddColumn: ParsableCommand {
         """
     )
 
-    @Argument(help: "Note UUID or unique prefix from ls, search or new") var id: String
+    @Argument(help: ReferenceHelp.note) var id: String
     @OptionGroup var table: TableOption
     @Option(help: "Position of the new column") var at: Int?
 
@@ -196,7 +196,7 @@ struct TableRemoveColumn: ParsableCommand {
         """
     )
 
-    @Argument(help: "Note UUID or unique prefix from ls, search or new") var id: String
+    @Argument(help: ReferenceHelp.note) var id: String
     @OptionGroup var table: TableOption
     @Option(help: "Column number to delete") var col: Int
 

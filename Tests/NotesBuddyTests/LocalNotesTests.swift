@@ -328,8 +328,105 @@ final class LocalNotesTests: XCTestCase {
         folder.setValue(true, forKey: "markedForDeletion")
         try context.save()
         XCTAssertThrowsError(try store.createNote(inFolder: folderID, html: "<p>Lost</p>")) { error in
-            XCTAssertEqual((error as NSError).localizedDescription, "Folder not found")
+            XCTAssertTrue((error as NSError).localizedDescription.hasPrefix("Folder not found: "), "\(error)")
         }
+    }
+
+    private func message(_ body: @autoclosure () throws -> Any) -> String {
+        do { _ = try body(); return "no error" } catch { return (error as NSError).localizedDescription }
+    }
+
+    func testEveryPrintedReferenceIsAcceptedAsInput() throws {
+        let store = try NBNotes(url: database, readOnly: false)
+        let folder = try store.createFolder("Printed", parent: "Fixture")
+        let note = try store.createNote(inFolder: folder, html: "<h1>Printed</h1>")
+        let file = directory.appendingPathComponent("printed.txt")
+        try Data("printed".utf8).write(to: file)
+        _ = try store.editNote(note, operation: "attachment-add", options: ["file": file.path])
+        _ = try store.editNote(note, operation: "tag-add", options: ["name": "printed"])
+        _ = try store.editNote(note, operation: "link-add", options: ["target": targetID!])
+        let state = try store.readNote(note)
+        func uuid(_ id: String) throws -> String { try XCTUnwrap(store.publicIdentifiers(forIDs: [id])[id]) }
+        for key in ["id", "url"] {
+            let printed = try XCTUnwrap(state[key] as? String)
+            XCTAssertEqual(try store.readNote(printed)["id"] as? String, note, key)
+        }
+        XCTAssertEqual(try store.readNote(try uuid(note))["id"] as? String, note)
+        let listed = try XCTUnwrap(try store.listFolders().first { $0["id"] as? String == folder })
+        for printed in [try XCTUnwrap(state["folder"] as? String), try XCTUnwrap(state["folderPath"] as? String), try XCTUnwrap(listed["path"] as? String), try XCTUnwrap(listed["name"] as? String), try uuid(folder), try uuid(folder).lowercased()] {
+            XCTAssertEqual(try store.canonicalID(forReference: printed, entity: "ICFolder"), folder, printed)
+        }
+        let attachment = try XCTUnwrap((state["attachments"] as? [[String: Any]])?.first)
+        let attachmentID = try XCTUnwrap(attachment["id"] as? String)
+        for printed in [attachmentID, try XCTUnwrap(attachment["name"] as? String), try uuid(attachmentID)] {
+            XCTAssertEqual(try store.attachmentID(forReference: printed, note: note), attachmentID, printed)
+        }
+        let tag = try XCTUnwrap((state["tags"] as? [[String: Any]])?.first)
+        for key in ["name", "contentIdentifier"] {
+            XCTAssertEqual(try store.noteIDs(withTag: try XCTUnwrap(tag[key] as? String)), [note], key)
+        }
+        let link = try XCTUnwrap((state["links"] as? [[String: Any]])?.first)
+        XCTAssertEqual(try store.readNote(try XCTUnwrap(link["target"] as? String))["id"] as? String, targetID)
+        let removed = try store.editNote(note, operation: "link-remove", options: ["link": try uuid(try XCTUnwrap(link["id"] as? String))])
+        XCTAssertEqual((removed["links"] as? [[String: Any]])?.count, 0)
+    }
+
+    func testFolderReferencesAcceptPathsNamesAndReportTheInput() throws {
+        let store = try NBNotes(url: database, readOnly: false)
+        let sub = try store.createFolder("Sub", parent: "Fixture")
+        let other = try store.createFolder("Other", parent: nil)
+        _ = try store.createFolder("Sub", parent: other)
+        XCTAssertEqual(try store.canonicalID(forReference: "Fixture/Sub", entity: "ICFolder"), sub)
+        XCTAssertEqual(try store.canonicalID(forReference: "fixture/sub", entity: "ICFolder"), sub)
+        XCTAssertEqual(try store.canonicalID(forReference: "other", entity: "ICFolder"), other)
+        let note = try store.createNote(inFolder: "Fixture/Sub", html: "<h1>Nested</h1>")
+        XCTAssertEqual(try store.readNote(note)["folderPath"] as? String, "Fixture/Sub")
+        XCTAssertEqual(message(try store.createNote(inFolder: "Sub", html: "<p>x</p>")), "Folder name is ambiguous: Sub. Use a path: Fixture/Sub, Other/Sub")
+        XCTAssertEqual(message(try store.listNotes(inFolder: "Missing/One")), "Folder not found: Missing/One. Use a name, a path such as Work/Project or a UUID from nb folders")
+        XCTAssertEqual(message(try store.search("Nested", options: ["folder": "Missing"])), "Folder not found: Missing. Use a name, a path such as Work/Project or a UUID from nb folders")
+        let noteUUID = try XCTUnwrap(store.publicIdentifiers(forIDs: [note])[note])
+        XCTAssertEqual(message(try store.listNotes(inFolder: noteUUID)), "\(noteUUID) is a note, a folder is required")
+    }
+
+    func testNoteReferencesAcceptTheNoteURLAndReportTheInput() throws {
+        let store = try NBNotes(url: database, readOnly: false)
+        let state = try store.readNote(noteID)
+        let url = try XCTUnwrap(state["url"] as? String)
+        XCTAssertEqual(try store.readNote(url)["id"] as? String, noteID)
+        XCTAssertEqual(message(try store.readNote("00000000")), "Note not found: 00000000. Use a UUID or its prefix of at least 8 characters from nb ls or nb search")
+        XCTAssertEqual(message(try store.readNote("Fixture")), "Note not found: Fixture. Use a UUID or its prefix of at least 8 characters from nb ls or nb search")
+        let folderID = try XCTUnwrap(try store.listFolders().first { $0["name"] as? String == "Fixture" }?["id"] as? String)
+        let folderUUID = try XCTUnwrap(store.publicIdentifiers(forIDs: [folderID])[folderID])
+        XCTAssertEqual(message(try store.readNote(folderUUID)), "\(folderUUID) is a folder, a note is required")
+    }
+
+    func testAttachmentReferencesAcceptFileNames() throws {
+        let store = try NBNotes(url: database, readOnly: false)
+        let plain = try store.createNote(inFolder: "Fixture", html: "<h1>Files</h1>")
+        for name in ["first.txt", "second.txt"] {
+            let file = directory.appendingPathComponent(name)
+            try Data(name.utf8).write(to: file)
+            _ = try store.editNote(plain, operation: "attachment-add", options: ["file": file.path])
+        }
+        let items = try XCTUnwrap(store.readNote(plain)["attachments"] as? [[String: Any]])
+        let second = try XCTUnwrap(items.first { $0["name"] as? String == "second.txt" }?["id"] as? String)
+        XCTAssertEqual(try store.attachmentID(forReference: "second.txt", note: plain), second)
+        XCTAssertEqual(try store.attachmentID(forReference: second, note: plain), second)
+        let after = try store.editNote(plain, operation: "attachment-remove", options: ["attachment": "first.txt"])
+        XCTAssertEqual((after["attachments"] as? [[String: Any]])?.compactMap { $0["name"] as? String }, ["second.txt"])
+        XCTAssertEqual(message(try store.attachmentID(forReference: "absent.txt", note: plain)), "Attachment not found in this note: absent.txt. Use a file name or a UUID from nb attachments ls")
+        XCTAssertEqual(message(try store.attachmentID(forReference: second, note: targetID)), "Attachment not found in this note: \(second). Use a file name or a UUID from nb attachments ls")
+    }
+
+    func testTagReferencesAreValidatedTheSameWayForFilterAndEdit() throws {
+        let store = try NBNotes(url: database, readOnly: false)
+        _ = try store.editNote(targetID, operation: "tag-add", options: ["name": "kept"])
+        XCTAssertEqual(try store.noteIDs(withTag: "#kept"), [targetID])
+        XCTAssertEqual(try store.noteIDs(withTag: "KEPT"), [targetID])
+        XCTAssertEqual(message(try store.noteIDs(withTag: "bad!")), "Invalid tag name: bad!. Use letters, digits, _ and -")
+        XCTAssertEqual(message(try store.editNote(targetID, operation: "tag-add", options: ["name": "bad!"])), "Invalid tag name: bad!. Use letters, digits, _ and -")
+        XCTAssertEqual(message(try store.editNote(targetID, operation: "tag-remove", options: ["name": "absent"])), "Tag not found in this note: #absent")
+        XCTAssertEqual((try store.readNote(targetID)["tags"] as? [[String: Any]])?.count, 1)
     }
 
     func testNativeHTMLWriteRejectsAttachmentsAndReadOnlyWrites() throws {

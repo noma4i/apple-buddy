@@ -1,4 +1,12 @@
+import ArgumentParser
 import Foundation
+
+enum ReferenceHelp {
+    static let note: ArgumentHelp = "Note UUID, unique prefix or applenotes URL from ls, search or new"
+    static let folder = "name, path such as Work/Project, UUID or unique prefix"
+    static let attachment: ArgumentHelp = "Attachment file name, UUID or unique prefix from attachments ls"
+    static let tag = "name with or without #"
+}
 
 struct NotesError: Error, CustomStringConvertible {
     let description: String
@@ -79,15 +87,8 @@ func listNotes(in folder: Folder) throws -> [Note] {
 }
 
 func resolveFolder(named name: String) throws -> Folder {
-    let folders = try listFolders()
-    let named = folders.filter { $0.name == name || $0.id == name }
-    let matches: [Folder]
-    if named.isEmpty {
-        let id = try openLocalNotes(readOnly: true).canonicalID(forReference: name, entity: "ICFolder")
-        matches = folders.filter { $0.id == id }
-    } else { matches = named }
-    guard let folder = matches.first else { throw NotesError(description: "folder not found: \(name)") }
-    guard matches.count == 1 else { throw NotesError(description: "folder name is ambiguous: \(name)") }
+    let id = try openLocalNotes(readOnly: true).canonicalID(forReference: name, entity: "ICFolder")
+    guard let folder = try listFolders().first(where: { $0.id == id }) else { throw NotesError(description: "Notes returned no data for folder \(name)") }
     return folder
 }
 

@@ -21,6 +21,7 @@ FOUNDATION_EXPORT NSInteger NBNotesSyncInterruption(void);
 - (nullable NSDictionary *)noteOpenDetails:(NSString *)identifier error:(NSError **)error;
 - (nullable NSDictionary<NSString *, NSString *> *)publicIdentifiersForIDs:(NSArray<NSString *> *)identifiers error:(NSError **)error;
 - (nullable NSString *)canonicalIDForReference:(NSString *)reference entity:(NSString *)entity error:(NSError **)error;
+- (nullable NSString *)attachmentIDForReference:(NSString *)reference note:(NSString *)note error:(NSError **)error;
 - (nullable NSArray<NSString *> *)backupAttachmentPaths:(NSError **)error;
 - (nullable NSArray<NSString *> *)noteIDsWithTag:(NSString *)tag error:(NSError **)error;
 - (nullable NSDictionary *)searchNotes:(NSString *)query options:(NSDictionary *)options error:(NSError **)error;

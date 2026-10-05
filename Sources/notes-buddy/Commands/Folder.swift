@@ -15,7 +15,7 @@ struct MakeFolder: ParsableCommand {
     )
 
     @Argument(help: "Name of the new folder") var name: String
-    @Option(help: "Parent folder name, UUID or unique prefix") var parent: String?
+    @Option(help: ArgumentHelp("Parent folder, by \(ReferenceHelp.folder)")) var parent: String?
 
     func run() throws {
         let id = try openLocalNotes(readOnly: false).createFolder(name, parent: parent)
@@ -38,7 +38,7 @@ struct RemoveFolder: ParsableCommand {
         """
     )
 
-    @Argument(help: "Name, UUID or unique prefix of the folder to delete") var name: String
+    @Argument(help: ArgumentHelp("Folder to delete, by \(ReferenceHelp.folder)")) var name: String
 
     func run() throws {
         let folder = try resolveFolder(named: name)

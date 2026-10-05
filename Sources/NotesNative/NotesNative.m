@@ -442,14 +442,31 @@ static void NBRequire(BOOL valid, NSString *message) {
 }
 
 - (NSManagedObject *)folder:(NSString *)reference {
-    NSError *error = nil;
-    NSString *canonical = [self canonicalIDForReference:reference entity:@"ICFolder" error:&error];
-    NSMutableArray *matches = [NSMutableArray array];
-    for (NSManagedObject *folder in [NSClassFromString(@"ICFolder") visibleFoldersInContext:_context]) {
-        if ([folder.objectID.URIRepresentation.absoluteString isEqualToString:canonical] || [[folder valueForKey:@"title"] isEqualToString:reference]) [matches addObject:folder];
+    NSArray<NSManagedObject *> *folders = [NSClassFromString(@"ICFolder") visibleFoldersInContext:_context];
+    NSArray<NSManagedObject *> *identified = [reference hasPrefix:@"x-coredata://"] ? @[] : [self objectsOfEntity:@"ICFolder" withUUIDPrefix:reference];
+    NBRequire(identified.count < 2, [NSString stringWithFormat:@"ID prefix is ambiguous: %@. Use more UUID characters", reference]);
+    NSString *canonical = identified.count ? identified.firstObject.objectID.URIRepresentation.absoluteString : reference;
+    for (NSManagedObject *folder in folders) {
+        if ([folder.objectID.URIRepresentation.absoluteString isEqualToString:canonical]) return folder;
     }
-    NBRequire(matches.count == 1, matches.count ? @"Folder name is ambiguous, use its id" : error.localizedDescription ?: @"Folder not found");
-    return matches.firstObject;
+    for (NSNumber *insensitive in @[@NO, @YES]) {
+        for (NSNumber *byPath in @[@YES, @NO]) {
+            NSMutableArray<NSManagedObject *> *matches = [NSMutableArray array];
+            for (NSManagedObject *folder in folders) {
+                NSString *value = byPath.boolValue ? [self folderPath:folder] : [folder valueForKey:@"title"] ?: @"";
+                if ([value compare:reference options:insensitive.boolValue ? NSCaseInsensitiveSearch : 0] == NSOrderedSame) [matches addObject:folder];
+            }
+            if (matches.count == 1) return matches.firstObject;
+            if (matches.count > 1) {
+                NSMutableArray *paths = [NSMutableArray array];
+                for (NSManagedObject *folder in matches) [paths addObject:[self folderPath:folder]];
+                BOOL distinct = [NSSet setWithArray:paths].count == paths.count;
+                NBRequire(NO, [NSString stringWithFormat:@"Folder name is ambiguous: %@. Use a %@", reference, distinct ? [@"path: " stringByAppendingString:[[paths sortedArrayUsingSelector:@selector(compare:)] componentsJoinedByString:@", "]] : @"UUID from nb folders"]);
+            }
+        }
+    }
+    [self rejectReference:reference entity:@"ICFolder"];
+    return nil;
 }
 
 - (NSArray<NSDictionary *> *)listFolders:(NSError **)error {
@@ -672,8 +689,47 @@ static void NBRequire(BOOL valid, NSString *message) {
     } @catch (NSException *exception) { if (error) *error = NBError(exception.reason); return nil; }
 }
 
+- (NSArray<NSManagedObject *> *)objectsOfEntity:(NSString *)entity withUUIDPrefix:(NSString *)reference {
+    NSRegularExpression *pattern = [NSRegularExpression regularExpressionWithPattern:@"^[0-9a-fA-F]{8}[0-9a-fA-F-]{0,28}$" options:0 error:nil];
+    if ([pattern numberOfMatchesInString:reference options:0 range:NSMakeRange(0, reference.length)] != 1) return @[];
+    NSFetchRequest *request = [NSFetchRequest fetchRequestWithEntityName:entity];
+    BOOL folders = [entity isEqualToString:@"ICFolder"];
+    request.predicate = folders ? [NSPredicate predicateWithFormat:@"identifier != nil"] : [NSPredicate predicateWithFormat:@"identifier BEGINSWITH[c] %@", reference];
+    request.fetchLimit = folders ? 0 : 2;
+    NSError *error = nil;
+    NSArray *objects = [_context executeFetchRequest:request error:&error];
+    NBRequire(objects != nil, error.localizedDescription);
+    NSMutableArray *matches = [NSMutableArray array];
+    for (NSManagedObject *object in objects) {
+        if (folders && ![[NSUUID alloc] initWithUUIDString:[object valueForKey:@"identifier"]] && ![[NSUUID alloc] initWithUUIDString:[[object valueForKey:@"account"] valueForKey:@"identifier"]]) continue;
+        if ([[[self publicIdentifierForObject:object] lowercaseString] hasPrefix:reference.lowercaseString]) [matches addObject:object];
+        if (matches.count == 2) break;
+    }
+    return matches;
+}
+
+- (void)rejectReference:(NSString *)reference entity:(NSString *)entity {
+    NSDictionary *kinds = @{@"ICNote":@"a note", @"ICFolder":@"a folder", @"ICAttachment":@"an attachment", @"ICInlineAttachment":@"a link"};
+    for (NSString *other in @[@"ICNote", @"ICFolder", @"ICAttachment"]) {
+        if ([other isEqualToString:entity] || ([other isEqualToString:@"ICAttachment"] && [entity isEqualToString:@"ICInlineAttachment"])) continue;
+        if ([self objectsOfEntity:other withUUIDPrefix:reference].count) NBRequire(NO, [NSString stringWithFormat:@"%@ is %@, %@ is required", reference, kinds[other], kinds[entity]]);
+    }
+    NSDictionary *messages = @{
+        @"ICNote":@"Note not found: %@. Use a UUID or its prefix of at least 8 characters from nb ls or nb search",
+        @"ICFolder":@"Folder not found: %@. Use a name, a path such as Work/Project or a UUID from nb folders",
+        @"ICAttachment":@"Attachment not found in this note: %@. Use a file name or a UUID from nb attachments ls",
+        @"ICInlineAttachment":@"Link not found in this note: %@. Use a UUID from nb links ls"};
+    NBRequire(NO, [NSString stringWithFormat:messages[entity], reference]);
+}
+
 - (NSString *)canonicalIDForReference:(NSString *)reference entity:(NSString *)entity error:(NSError **)error {
     @try {
+        if ([entity isEqualToString:@"ICFolder"]) return [self folder:reference].objectID.URIRepresentation.absoluteString;
+        if ([entity isEqualToString:@"ICNote"] && [reference hasPrefix:@"applenotes://"]) {
+            for (NSURLQueryItem *item in [NSURLComponents componentsWithString:reference].queryItems) {
+                if ([item.name isEqualToString:@"identifier"] && item.value.length) reference = item.value;
+            }
+        }
         if ([reference hasPrefix:@"x-coredata://"]) {
             NSManagedObjectID *objectID = [_context.persistentStoreCoordinator managedObjectIDForURIRepresentation:[NSURL URLWithString:reference]];
             NBRequire(objectID != nil, @"Object id does not belong to this Notes database");
@@ -681,21 +737,10 @@ static void NBRequire(BOOL valid, NSString *message) {
             NBRequire([objectID.entity.name isEqualToString:entity] || ([entity isEqualToString:@"ICAttachment"] && [objectID.entity.name isEqualToString:@"ICInlineAttachment"]), @"ID belongs to another object type");
             return objectID.URIRepresentation.absoluteString;
         }
-        NSRegularExpression *pattern = [NSRegularExpression regularExpressionWithPattern:@"^[0-9a-fA-F]{8}[0-9a-fA-F-]{0,28}$" options:0 error:nil];
-        NBRequire([pattern numberOfMatchesInString:reference options:0 range:NSMakeRange(0, reference.length)] == 1, @"Use a UUID or its unique prefix of at least 8 characters");
-        NSFetchRequest *request = [NSFetchRequest fetchRequestWithEntityName:entity];
-        BOOL folders = [entity isEqualToString:@"ICFolder"];
-        request.predicate = folders ? [NSPredicate predicateWithFormat:@"identifier != nil"] : [NSPredicate predicateWithFormat:@"identifier BEGINSWITH[c] %@", reference];
-        request.fetchLimit = folders ? 0 : 2;
-        NSArray *objects = [_context executeFetchRequest:request error:error];
-        if (!objects) return nil;
-        NSMutableArray *matches = [NSMutableArray array];
-        for (NSManagedObject *object in objects) {
-            if ([[[self publicIdentifierForObject:object] lowercaseString] hasPrefix:reference.lowercaseString]) [matches addObject:object];
-            if (matches.count == 2) break;
-        }
-        NBRequire(matches.count == 1, matches.count ? @"ID prefix is ambiguous, use more UUID characters" : @"UUID not found for this object type");
-        return [matches.firstObject objectID].URIRepresentation.absoluteString;
+        NSArray<NSManagedObject *> *matches = [self objectsOfEntity:entity withUUIDPrefix:reference];
+        NBRequire(matches.count < 2, [NSString stringWithFormat:@"ID prefix is ambiguous: %@. Use more UUID characters", reference]);
+        if (!matches.count) [self rejectReference:reference entity:entity];
+        return matches.firstObject.objectID.URIRepresentation.absoluteString;
     } @catch (NSException *exception) { if (error) *error = NBError(exception.reason); return nil; }
 }
 
@@ -939,14 +984,23 @@ static void NBRequire(BOOL valid, NSString *message) {
 }
 
 - (NSManagedObject *)attachment:(NSString *)identifier inNote:(NSManagedObject *)note {
-    NSError *error = nil;
-    NSString *canonical = [self canonicalIDForReference:identifier entity:@"ICAttachment" error:&error];
-    NBRequire(canonical != nil, error.localizedDescription);
+    NSMutableArray<NSManagedObject *> *identified = [NSMutableArray array], *named = [NSMutableArray array];
+    BOOL prefix = identifier.length >= 8 && [identifier rangeOfCharacterFromSet:[NSCharacterSet characterSetWithCharactersInString:@"0123456789abcdefABCDEF-"].invertedSet].location == NSNotFound;
     for (NSManagedObject *attachment in [self attachmentsInNote:note]) {
-        if ([attachment.objectID.URIRepresentation.absoluteString isEqualToString:canonical]) return attachment;
+        if ([attachment.objectID.URIRepresentation.absoluteString isEqualToString:identifier] || (prefix && [[[self publicIdentifierForObject:attachment] lowercaseString] hasPrefix:identifier.lowercaseString])) [identified addObject:attachment];
+        if ([[attachment fileURL].lastPathComponent isEqualToString:identifier]) [named addObject:attachment];
     }
-    NBRequire(NO, @"Attachment not found in this note");
-    return nil;
+    NSArray<NSManagedObject *> *matches = identified.count ? identified : named;
+    NBRequire(matches.count < 2, [NSString stringWithFormat:@"Attachment reference is ambiguous: %@. Use a UUID from nb attachments ls", identifier]);
+    if (!matches.count) [self rejectReference:identifier entity:@"ICAttachment"];
+    return matches.firstObject;
+}
+
+- (NSString *)attachmentIDForReference:(NSString *)reference note:(NSString *)identifier error:(NSError **)error {
+    @try {
+        NSManagedObject *note = [self note:identifier error:error];
+        return note ? [self attachment:reference inNote:note].objectID.URIRepresentation.absoluteString : nil;
+    } @catch (NSException *exception) { if (error) *error = NBError(exception.reason); return nil; }
 }
 
 - (NSUInteger)removeMarkers:(NSManagedObject *)attachment fromDocument:(id)document {
@@ -1082,10 +1136,30 @@ static void NBRequire(BOOL valid, NSString *message) {
     }
 }
 
+- (NSArray<NSString *> *)tagNames:(NSString *)input {
+    NSMutableCharacterSet *allowed = [NSCharacterSet.alphanumericCharacterSet mutableCopy];
+    [allowed addCharactersInString:@"_-"];
+    NSMutableCharacterSet *separators = [NSCharacterSet.whitespaceAndNewlineCharacterSet mutableCopy];
+    [separators addCharactersInString:@"/,"];
+    NSMutableArray<NSString *> *names = [NSMutableArray array];
+    NSMutableSet<NSString *> *canonicalNames = [NSMutableSet set];
+    for (NSString *part in [input componentsSeparatedByCharactersInSet:separators]) {
+        if (!part.length) continue;
+        NSString *name = [part hasPrefix:@"#"] ? [part substringFromIndex:1] : part;
+        NBRequire(name.length && [name rangeOfCharacterFromSet:allowed.invertedSet].location == NSNotFound, [NSString stringWithFormat:@"Invalid tag name: %@. Use letters, digits, _ and -", part]);
+        NSString *canonical = [NSClassFromString(@"ICHashtag") standardizedHashtagRepresentationForDisplayText:name];
+        if ([canonicalNames containsObject:canonical]) continue;
+        [canonicalNames addObject:canonical];
+        [names addObject:name];
+    }
+    return names;
+}
+
 - (NSArray<NSString *> *)noteIDsWithTag:(NSString *)tag error:(NSError **)error {
     @try {
-        NSString *name = [tag hasPrefix:@"#"] ? [tag substringFromIndex:1] : tag;
-        NSString *canonical = [NSClassFromString(@"ICHashtag") standardizedHashtagRepresentationForDisplayText:name];
+        NSArray<NSString *> *names = [self tagNames:tag];
+        NBRequire(names.count == 1, @"Use 1 tag name");
+        NSString *canonical = [NSClassFromString(@"ICHashtag") standardizedHashtagRepresentationForDisplayText:names.firstObject];
         NSMutableArray *ids = [NSMutableArray array];
         for (NSManagedObjectID *objectID in [NSClassFromString(@"ICNote") notesContainingHashtagWithStandarizedContent:canonical context:_context]) {
             NSManagedObject *note = [_context existingObjectWithID:objectID error:error];
@@ -1312,22 +1386,8 @@ static void NBRequire(BOOL valid, NSString *message) {
             [self removeMarkers:found fromDocument:document];
             [found updateMarkedForDeletionStateInlineAttachmentIsInUse:NO];
         } else if ([operation hasPrefix:@"tag-"]) {
-            NSMutableCharacterSet *allowed = [NSCharacterSet.alphanumericCharacterSet mutableCopy];
-            [allowed addCharactersInString:@"_-"];
             Class hashtag = NSClassFromString(@"ICHashtag");
-            NSMutableCharacterSet *separators = [NSCharacterSet.whitespaceAndNewlineCharacterSet mutableCopy];
-            [separators addCharactersInString:@"/,"];
-            NSMutableArray<NSString *> *names = [NSMutableArray array];
-            NSMutableSet<NSString *> *canonicalNames = [NSMutableSet set];
-            for (NSString *part in [options[@"name"] componentsSeparatedByCharactersInSet:separators]) {
-                if (!part.length) continue;
-                NSString *name = [part hasPrefix:@"#"] ? [part substringFromIndex:1] : part;
-                NBRequire(name.length && [name rangeOfCharacterFromSet:allowed.invertedSet].location == NSNotFound, @"Invalid tag name");
-                NSString *canonical = [hashtag standardizedHashtagRepresentationForDisplayText:name];
-                if ([canonicalNames containsObject:canonical]) continue;
-                [canonicalNames addObject:canonical];
-                [names addObject:name];
-            }
+            NSArray<NSString *> *names = [self tagNames:options[@"name"]];
             NBRequire(names.count, @"Provide at least one tag name");
             for (NSString *name in names) {
                 NSString *canonical = [hashtag standardizedHashtagRepresentationForDisplayText:name];
@@ -1343,6 +1403,7 @@ static void NBRequire(BOOL valid, NSString *message) {
                     NBRequire(tag != nil, @"Notes could not create this tag");
                     [document insertAttributedString:[self marker:tag] atIndex:[self position:options inDocument:document]];
                 } else if ([operation isEqualToString:@"tag-remove"]) {
+                    NBRequire(matches.count, [NSString stringWithFormat:@"Tag not found in this note: #%@", name]);
                     for (NSManagedObject *tag in matches) {
                         [self removeMarkers:tag fromDocument:document];
                         [tag updateMarkedForDeletionStateInlineAttachmentIsInUse:NO];
