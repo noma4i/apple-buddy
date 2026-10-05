@@ -175,7 +175,7 @@ struct ImportBear: ParsableCommand {
         }
         let inventory: [String: Any] = ["sourceNotes": all.count, "selectedNotes": notes.count, "files": notes.reduce(0) { $0 + $1.files.count }, "destinations": Set(notes.map(\.destination)).sorted()]
         if dryRun { try output.write(inventory); return }
-        guard FileManager.default.isExecutableFile(atPath: pandoc) else { throw ValidationError("pandoc executable not found: \(pandoc)") }
+        guard FileManager.default.isExecutableFile(atPath: pandoc) else { throw NotesError(description: "pandoc executable not found: \(pandoc)") }
         let digests = try Dictionary(uniqueKeysWithValues: Set(notes.flatMap(\.files)).map { ($0, try fileDigest($0)) })
         let scratch = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: false)

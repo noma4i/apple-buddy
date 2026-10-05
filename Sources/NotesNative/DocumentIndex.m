@@ -23,7 +23,8 @@ static NSURL *NBIndexFile(NSURL *file, NSURL *directory) {
 NSArray<NSDictionary *> *NBIndexDocuments(NSArray<NSURL *> *files, NSURL *directory) {
     if (!files.count) return @[];
     NSFileManager *disk = NSFileManager.defaultManager;
-    BOOL writable = [disk createDirectoryAtURL:directory withIntermediateDirectories:YES attributes:@{NSFilePosixPermissions:@0700} error:nil];
+    BOOL writable = [disk createDirectoryAtURL:directory withIntermediateDirectories:YES attributes:@{NSFilePosixPermissions:@0700} error:nil]
+        && chmod(directory.fileSystemRepresentation, 0700) == 0;
     NSMutableArray *results = [NSMutableArray arrayWithCapacity:files.count];
     NSMutableArray *pending = [NSMutableArray array];
     for (NSUInteger index = 0; index < files.count; index++) {

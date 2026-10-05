@@ -13,13 +13,13 @@ struct LocalNoteOptions: ParsableArguments {
 
 func quitNotes(_ applications: [NSRunningApplication]) throws {
     for application in applications where !application.isTerminated {
-        guard application.terminate() else { throw ValidationError("Notes refused to quit") }
+        guard application.terminate() else { throw NotesError(description: "Notes refused to quit") }
     }
     let deadline = Date().addingTimeInterval(10)
     while applications.contains(where: { !$0.isTerminated }) && Date() < deadline {
         RunLoop.current.run(until: Date().addingTimeInterval(0.05))
     }
-    guard applications.allSatisfy(\.isTerminated) else { throw ValidationError("Notes has not quit") }
+    guard applications.allSatisfy(\.isTerminated) else { throw NotesError(description: "Notes has not quit") }
 }
 
 func openLocalNotes(readOnly: Bool) throws -> NBNotes {
@@ -165,7 +165,7 @@ struct Attachments: ParsableCommand {
         if action == .export {
             let data = try store.readNote(note.id)
             guard let owner = data["id"] as? String, let items = data["attachments"] as? [[String: Any]] else {
-                throw ValidationError("Notes returned invalid attachments")
+                throw NotesError(description: "Notes returned invalid attachments")
             }
             var command = self
             if let attachment { command.attachment = try store.canonicalID(forReference: attachment, entity: "ICAttachment") }
@@ -207,15 +207,15 @@ struct Attachments: ParsableCommand {
     func exportFiles(_ items: [[String: Any]]) throws -> [[String: String]] {
         try validateExportDestination()
         let selected = items.filter { attachment == nil ? $0["type"] as? String != "com.apple.notes.table" : $0["id"] as? String == attachment }
-        guard attachment == nil || selected.count == 1 else { throw ValidationError("attachment not found in this note") }
+        guard attachment == nil || selected.count == 1 else { throw NotesError(description: "attachment not found in this note") }
         var copies: [(URL, URL, String)] = []
         var names = Set<String>()
         for item in selected {
             guard let id = item["id"] as? String, let path = item["path"] as? String, item["available"] as? Bool == true else {
-                throw ValidationError("attachment file is not available locally")
+                throw NotesError(description: "attachment file is not available locally")
             }
             let source = URL(fileURLWithPath: path)
-            guard FileManager.default.fileExists(atPath: source.path) else { throw ValidationError("attachment file is not available locally") }
+            guard FileManager.default.fileExists(atPath: source.path) else { throw NotesError(description: "attachment file is not available locally") }
             let destination: URL
             if let file { destination = URL(fileURLWithPath: file) }
             else {
@@ -229,7 +229,7 @@ struct Attachments: ParsableCommand {
                 destination = folder.appendingPathComponent(name)
             }
             guard !FileManager.default.fileExists(atPath: destination.path) else {
-                throw ValidationError("destination already exists: \(destination.path)")
+                throw NotesError(description: "destination already exists: \(destination.path)")
             }
             copies.append((source, destination, id))
         }

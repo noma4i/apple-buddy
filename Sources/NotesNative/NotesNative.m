@@ -29,7 +29,9 @@ static NSString *NBSearchPattern(NSString *query) {
         NSMutableArray<NSString *> *characters = [NSMutableArray array];
         [word enumerateSubstringsInRange:NSMakeRange(0, word.length) options:NSStringEnumerationByComposedCharacterSequences usingBlock:^(NSString *part, NSRange range, NSRange enclosingRange, BOOL *stop) { [characters addObject:part]; }];
         NSMutableOrderedSet *variants = [NSMutableOrderedSet orderedSetWithObject:[NSRegularExpression escapedPatternForString:word]];
-        if (characters.count >= 3 && [word rangeOfCharacterFromSet:NSCharacterSet.letterCharacterSet.invertedSet].location == NSNotFound) {
+        NSCharacterSet *digits = NSCharacterSet.decimalDigitCharacterSet;
+        BOOL besideDigit = (part.range.location > 0 && [digits characterIsMember:[query characterAtIndex:part.range.location - 1]]) || (NSMaxRange(part.range) < query.length && [digits characterIsMember:[query characterAtIndex:NSMaxRange(part.range)]]);
+        if (characters.count >= 3 && !besideDigit && [word rangeOfCharacterFromSet:NSCharacterSet.letterCharacterSet.invertedSet].location == NSNotFound) {
             for (NSUInteger index = 0; index < characters.count; index++) {
                 NSString *left = [NSRegularExpression escapedPatternForString:[[characters subarrayWithRange:NSMakeRange(0, index)] componentsJoinedByString:@""]];
                 NSString *right = [NSRegularExpression escapedPatternForString:[[characters subarrayWithRange:NSMakeRange(index + 1, characters.count - index - 1)] componentsJoinedByString:@""]];
@@ -289,7 +291,7 @@ static void NBRequire(BOOL valid, NSString *message) {
             for (NSManagedObject *attachment in [note visibleTopLevelAttachments]) {
                 if (![[attachment valueForKey:@"typeUTI"] isEqualToString:@"com.apple.notes.table"]) onlyTables = NO;
             }
-            BOOL reserved = ![[note valueForKey:@"noteData"] valueForKey:@"data"] && ![[[[note mergeableString] attributedString] string] length] && onlyTables && ![note visibleInlineAttachments].count && ![[note valueForKey:@"isInCloud"] boolValue];
+            BOOL reserved = ![self isProtectedOrShared:note] && ![[note valueForKey:@"noteData"] valueForKey:@"data"] && ![[[[note mergeableString] attributedString] string] length] && onlyTables && ![note visibleInlineAttachments].count && ![[note valueForKey:@"isInCloud"] boolValue];
             if (!reserved) return @{@"id":note.objectID.URIRepresentation.absoluteString, @"imported":@NO};
             NBRequire([[note valueForKey:@"folder"] isEqual:[self folder:folder]], @"Incomplete import belongs to another folder");
             [_context deleteObject:note];
@@ -323,10 +325,24 @@ static void NBRequire(BOOL valid, NSString *message) {
     return YES;
 }
 
+- (BOOL)isProtectedOrShared:(NSManagedObject *)object {
+    if (![object isKindOfClass:NSClassFromString(@"ICCloudSyncingObject")]) return NO;
+    if ([[object valueForKey:@"isSharedViaICloud"] boolValue]) return YES;
+    NSManagedObject *owner = object;
+    while (owner && ![owner.entity.name isEqualToString:@"ICNote"]) {
+        NSDictionary *relationships = owner.entity.relationshipsByName;
+        owner = relationships[@"note"] ? [owner valueForKey:@"note"] : relationships[@"attachment"] ? [owner valueForKey:@"attachment"] : nil;
+    }
+    return [[owner valueForKey:@"isPasswordProtected"] boolValue] || [[owner valueForKey:@"isSharedViaICloud"] boolValue];
+}
+
 - (BOOL)saveChanges:(NSError **)error {
     [self requireWritable];
     NSMutableSet *changed = [_context.insertedObjects mutableCopy];
     [changed unionSet:_context.updatedObjects];
+    for (NSManagedObject *object in [changed setByAddingObjectsFromSet:_context.deletedObjects]) {
+        NBRequire(![self isProtectedOrShared:object], @"Protected and shared notes cannot be changed");
+    }
     for (NSManagedObject *object in changed) {
         if ([object isKindOfClass:NSClassFromString(@"ICCloudSyncingObject")] && !object.isDeleted) [object updateChangeCountWithReason:@"notes-buddy"];
     }
@@ -343,8 +359,8 @@ static void NBRequire(BOOL valid, NSString *message) {
         NSArray *objects = [_context executeFetchRequest:request error:error];
         if (!objects) return NO;
         for (NSManagedObject *object in objects) {
-            if ([[object valueForKey:@"isSharedViaICloud"] boolValue] || [[object valueForKey:@"markedForDeletion"] boolValue]) continue;
-            if ([object isKindOfClass:NSClassFromString(@"ICNote")] && ([[object valueForKey:@"isPasswordProtected"] boolValue] || [[object valueForKey:@"isDeletedOrInTrash"] boolValue])) continue;
+            if ([self isProtectedOrShared:object] || [[object valueForKey:@"markedForDeletion"] boolValue]) continue;
+            if ([object isKindOfClass:NSClassFromString(@"ICNote")] && [[object valueForKey:@"isDeletedOrInTrash"] boolValue]) continue;
             NSObject *document = [object valueForKey:@"activityEventsDocument"];
             if ([[document valueForKey:@"futureVersionCount"] unsignedIntegerValue] != 0) continue;
             NSObject *events = [document valueForKey:@"orderedSet"];
@@ -432,7 +448,7 @@ static void NBRequire(BOOL valid, NSString *message) {
     for (NSManagedObject *folder in [NSClassFromString(@"ICFolder") visibleFoldersInContext:_context]) {
         if ([folder.objectID.URIRepresentation.absoluteString isEqualToString:canonical] || [[folder valueForKey:@"title"] isEqualToString:reference]) [matches addObject:folder];
     }
-    NBRequire(matches.count == 1, matches.count ? @"Folder name is ambiguous, use its id" : error.localizedDescription);
+    NBRequire(matches.count == 1, matches.count ? @"Folder name is ambiguous, use its id" : error.localizedDescription ?: @"Folder not found");
     return matches.firstObject;
 }
 

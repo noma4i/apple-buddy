@@ -249,6 +249,89 @@ final class LocalNotesTests: XCTestCase {
         XCTAssertEqual(try context.existingObject(with: id).primitiveValue(forKey: "activityEventsData") as? Data, empty)
     }
 
+    func testActivityPreparationLeavesAttachmentsOfProtectedNotesUntouched() throws {
+        let store = try NBNotes(url: database, readOnly: false)
+        let context = try XCTUnwrap(store.value(forKey: "context") as? NSManagedObjectContext)
+        let id = try XCTUnwrap(context.persistentStoreCoordinator?.managedObjectID(forURIRepresentation: URL(string: noteID)!))
+        let note = try context.existingObject(with: id)
+        let attachment = try XCTUnwrap((note.value(forKey: "attachments") as? Set<NSManagedObject>)?.first)
+        let attachmentID = attachment.objectID
+        let document = try XCTUnwrap(note.value(forKey: "activityEventsDocument") as? NSObject)
+        let events = try XCTUnwrap(document.value(forKey: "orderedSet") as? NSObject)
+        _ = events.perform(NSSelectorFromString("addObject:"), with: "Fixture event")
+        _ = events.perform(NSSelectorFromString("removeAllObjects"))
+        let empty = try XCTUnwrap(document.perform(NSSelectorFromString("serialize"))?.takeUnretainedValue() as? Data)
+        note.setValue(true, forKey: "isPasswordProtected")
+        try context.save()
+        context.reset()
+        try context.existingObject(with: attachmentID).setValue(empty, forKey: "activityEventsData")
+        try context.save()
+        context.reset()
+        XCTAssertEqual(try context.existingObject(with: attachmentID).primitiveValue(forKey: "activityEventsData") as? Data, empty)
+        try store.pruneEmptyActivityEvents()
+        XCTAssertEqual(try context.existingObject(with: attachmentID).primitiveValue(forKey: "activityEventsData") as? Data, empty)
+    }
+
+    func testImportKeepsAProtectedNoteWithTheSameIdentifier() throws {
+        let store = try NBNotes(url: database, readOnly: false)
+        let context = try XCTUnwrap(store.value(forKey: "context") as? NSManagedObjectContext)
+        let folderID = try XCTUnwrap(try store.listFolders().first { $0["name"] as? String == "Fixture" }?["id"] as? String)
+        let folder = try context.existingObject(with: try XCTUnwrap(context.persistentStoreCoordinator?.managedObjectID(forURIRepresentation: URL(string: folderID)!)))
+        let identifier = UUID().uuidString
+        let cls = try XCTUnwrap(NSClassFromString("ICNote") as? NSObject.Type)
+        let note = try XCTUnwrap(cls.perform(NSSelectorFromString("newEmptyNoteWithIdentifier:folder:"), with: identifier, with: folder)?.takeUnretainedValue() as? NSManagedObject)
+        note.setValue(true, forKey: "isPasswordProtected")
+        try context.save()
+        let protectedID = note.objectID.uriRepresentation().absoluteString
+        let result = try store.importNote(withIdentifier: identifier, folder: "Fixture", html: "<h1>Replacement</h1>", tags: "", files: [])
+        XCTAssertEqual(result["imported"] as? Bool, false)
+        XCTAssertEqual(result["id"] as? String, protectedID)
+        let reopened = try XCTUnwrap(NBNotes(url: database, readOnly: true).value(forKey: "context") as? NSManagedObjectContext)
+        let request = NSFetchRequest<NSManagedObject>(entityName: "ICNote")
+        request.predicate = NSPredicate(format: "identifier == %@", identifier)
+        let found = try reopened.fetch(request)
+        XCTAssertEqual(found.map { $0.objectID.uriRepresentation().absoluteString }, [protectedID])
+        XCTAssertEqual(found.first?.value(forKey: "isPasswordProtected") as? Bool, true)
+        let sharedIdentifier = UUID().uuidString
+        let shared = try XCTUnwrap(cls.perform(NSSelectorFromString("newEmptyNoteWithIdentifier:folder:"), with: sharedIdentifier, with: try context.existingObject(with: folder.objectID))?.takeUnretainedValue() as? NSManagedObject)
+        shared.setValue("_someone_else", forKey: "zoneOwnerName")
+        try context.save()
+        XCTAssertEqual(shared.value(forKey: "isSharedViaICloud") as? Bool, true)
+        let kept = try store.importNote(withIdentifier: sharedIdentifier, folder: "Fixture", html: "<h1>Replacement</h1>", tags: "", files: [])
+        XCTAssertEqual(kept["imported"] as? Bool, false)
+        XCTAssertEqual(kept["id"] as? String, shared.objectID.uriRepresentation().absoluteString)
+    }
+
+    func testSaveRefusesPendingChangesToProtectedAndSharedNotes() throws {
+        for (key, value) in [("isPasswordProtected", true as Any), ("zoneOwnerName", "_someone_else" as Any)] {
+            let store = try NBNotes(url: database, readOnly: false)
+            let context = try XCTUnwrap(store.value(forKey: "context") as? NSManagedObjectContext)
+            let id = try XCTUnwrap(context.persistentStoreCoordinator?.managedObjectID(forURIRepresentation: URL(string: targetID)!))
+            let note = try context.existingObject(with: id)
+            note.setValue(value, forKey: key)
+            try context.save()
+            note.setValue("Changed behind the check", forKey: "title")
+            XCTAssertThrowsError(try store.createFolder("Unrelated \(key)", parent: nil), key)
+            let reopened = try XCTUnwrap(NBNotes(url: database, readOnly: true).value(forKey: "context") as? NSManagedObjectContext)
+            XCTAssertEqual(try reopened.existingObject(with: id).value(forKey: "title") as? String, "Target", key)
+            XCTAssertFalse(try NBNotes(url: database, readOnly: true).listFolders().contains { ($0["name"] as? String)?.hasPrefix("Unrelated") == true }, key)
+            note.setValue(key == "zoneOwnerName" ? nil : false, forKey: key)
+            try context.save()
+        }
+    }
+
+    func testHiddenFolderReferenceIsRejectedWithAReadableMessage() throws {
+        let store = try NBNotes(url: database, readOnly: false)
+        let folderID = try store.createFolder("Hidden", parent: nil)
+        let context = try XCTUnwrap(store.value(forKey: "context") as? NSManagedObjectContext)
+        let folder = try context.existingObject(with: try XCTUnwrap(context.persistentStoreCoordinator?.managedObjectID(forURIRepresentation: URL(string: folderID)!)))
+        folder.setValue(true, forKey: "markedForDeletion")
+        try context.save()
+        XCTAssertThrowsError(try store.createNote(inFolder: folderID, html: "<p>Lost</p>")) { error in
+            XCTAssertEqual((error as NSError).localizedDescription, "Folder not found")
+        }
+    }
+
     func testNativeHTMLWriteRejectsAttachmentsAndReadOnlyWrites() throws {
         let store = try NBNotes(url: database, readOnly: false)
         XCTAssertThrowsError(try store.setHTML("<p>lost</p>", forNote: noteID))
@@ -708,7 +791,8 @@ final class LocalNotesTests: XCTestCase {
             XCTAssertEqual(try Data(contentsOf: file), Data(file.lastPathComponent.utf8))
         }
         let again = try run(["attachments", "export", id, "--directory", destination.path])
-        XCTAssertNotEqual(again.0, 0)
+        XCTAssertEqual(again.0, 1, again.2)
+        XCTAssertFalse(again.2.contains("Usage:"), again.2)
         XCTAssertTrue(again.1.isEmpty)
         let jsonResult = try run(["attachments", "export", id, "--directory", directory.appendingPathComponent("json-export").path, "--json"])
         XCTAssertEqual(jsonResult.0, 0, jsonResult.2)
@@ -893,6 +977,28 @@ final class LocalNotesTests: XCTestCase {
             let result = try store.search(query, options: ["field": field])
             XCTAssertEqual(result["total"] as? Int, 0, query)
         }
+    }
+
+    func testFuzzySearchKeepsLettersNextToDigitsLiteral() throws {
+        let store = try NBNotes(url: database, readOnly: false)
+        _ = try store.createNote(inFolder: "Fixture", html: "<h1>Order abxd1234 and 77wxyz</h1>")
+        for query in ["abcd1234", "77wxzz"] {
+            XCTAssertEqual(try store.search(query, options: ["field": "title"])["total"] as? Int, 0, query)
+        }
+        XCTAssertEqual(try store.search("abxd1234", options: ["field": "title"])["total"] as? Int, 1)
+        XCTAssertEqual(try store.search("Ordr", options: ["field": "title"])["total"] as? Int, 1)
+    }
+
+    func testDocumentIndexRestoresPrivatePermissionsOfAnExistingDirectory() throws {
+        let store = try NBNotes(url: database, readOnly: false)
+        let index = directory.appendingPathComponent("documents-v1")
+        try FileManager.default.createDirectory(at: index, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o755])
+        let image = directory.appendingPathComponent("pixel.png")
+        let bitmap = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 40, pixelsHigh: 40, bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0))
+        try XCTUnwrap(bitmap.representation(using: .png, properties: [:])).write(to: image)
+        _ = try store.editNote(noteID, operation: "attachment-add", options: ["file": image.path])
+        _ = try store.search("anything", options: ["field": "document"])
+        XCTAssertEqual(try FileManager.default.attributesOfItem(atPath: index.path)[.posixPermissions] as? Int, 0o700)
     }
 
     func testSearchFindsPDFOnlyTextWithWrappedPhrasesAndTypos() throws {
