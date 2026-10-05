@@ -371,6 +371,8 @@ final class LocalNotesTests: XCTestCase {
         for key in ["name", "contentIdentifier"] {
             XCTAssertEqual(try store.noteIDs(withTag: try XCTUnwrap(tag[key] as? String)), [note], key)
         }
+        let untagged = try store.editNote(note, operation: "tag-remove", options: ["name": try uuid(try XCTUnwrap(tag["id"] as? String))])
+        XCTAssertEqual((untagged["tags"] as? [[String: Any]])?.count, 0)
         let link = try XCTUnwrap((state["links"] as? [[String: Any]])?.first)
         XCTAssertEqual(try store.readNote(try XCTUnwrap(link["target"] as? String))["id"] as? String, targetID)
         let removed = try store.editNote(note, operation: "link-remove", options: ["link": try uuid(try XCTUnwrap(link["id"] as? String))])

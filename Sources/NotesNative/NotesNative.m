@@ -1445,7 +1445,7 @@ static void NBRequire(BOOL valid, NSString *message) {
                     if (![[item valueForKey:@"isHashtagAttachment"] boolValue]) continue;
                     NSString *display = [item valueForKey:@"displayText"];
                     if ([display hasPrefix:@"#"]) display = [display substringFromIndex:1];
-                    if ([[hashtag standardizedHashtagRepresentationForDisplayText:display] isEqualToString:canonical]) [matches addObject:item];
+                    if ([[hashtag standardizedHashtagRepresentationForDisplayText:display] isEqualToString:canonical] || [[self publicIdentifierForObject:item] caseInsensitiveCompare:name] == NSOrderedSame) [matches addObject:item];
                 }
                 if ([operation isEqualToString:@"tag-add"] && !matches.count) {
                     id tag = [NSClassFromString(@"ICInlineAttachment") newHashtagAttachmentWithIdentifier:NSUUID.UUID.UUIDString hashtagText:name creatingHashtagIfNecessary:YES note:note parentAttachment:nil];

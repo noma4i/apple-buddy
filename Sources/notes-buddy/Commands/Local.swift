@@ -100,7 +100,7 @@ struct Tags: ParsableCommand {
     static let configuration = CommandConfiguration(abstract: "List, add or remove native tags on a note", discussion: "Without --add or --remove, lists tags. Add --json for structured data. Separate names with slashes, commas or whitespace. Each name becomes a distinct native tag, not text. Duplicates are ignored. Invalid names reject the whole batch. --remove uses the same separators and affects only this note. Search with ls --tag. Example: nb tags <id> --add 'invoices/tech,other'")
     @OptionGroup var note: LocalNoteOptions
     @Option(help: ArgumentHelp("Native tags to add, \(ReferenceHelp.tag), separated by slash, comma or whitespace")) var add: String?
-    @Option(help: ArgumentHelp("Native tags to remove, \(ReferenceHelp.tag), separated by slash, comma or whitespace")) var remove: String?
+    @Option(help: ArgumentHelp("Native tags to remove, \(ReferenceHelp.tag) or tag id, separated by slash, comma or whitespace")) var remove: String?
 
     func run() throws {
         guard add == nil || remove == nil else { throw ValidationError("choose either --add or --remove") }
