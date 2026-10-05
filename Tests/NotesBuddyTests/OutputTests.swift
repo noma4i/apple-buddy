@@ -1,10 +1,32 @@
 import Foundation
+import Darwin
 import SQLite3
 import XCTest
 import ArgumentParser
 @testable import notes_buddy
 
 final class OutputTests: XCTestCase {
+    func testActionPrintsTheFullObjectUUIDInsteadOfTheInputPrefix() throws {
+        let uuid = "4B34F396-8895-4AC0-B593-28A8C5DD3521"
+        let pipe = Pipe()
+        fflush(stdout)
+        let original = dup(STDOUT_FILENO)
+        defer { dup2(original, STDOUT_FILENO); close(original) }
+        dup2(pipe.fileHandleForWriting.fileDescriptor, STDOUT_FILENO)
+        try OutputOptions.parse([]).writeAction("pin", ["id": uuid, "title": "Fixture", "folderPath": "Demo"])
+        fflush(stdout)
+        dup2(original, STDOUT_FILENO)
+        try pipe.fileHandleForWriting.close()
+        XCTAssertEqual(String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self), uuid + "\n")
+    }
+
+    func testJSONFilePathsAndURLsRemainReadable() throws {
+        let output = try OutputOptions.parse(["--json"])
+        let text = try output.format(["path": "/tmp/report.pdf", "url": "file:///tmp/report.pdf"])
+        XCTAssertTrue(text.contains("/tmp/report.pdf"))
+        XCTAssertTrue(text.contains("file:///tmp/report.pdf"))
+        XCTAssertFalse(text.contains("\\/"))
+    }
     func testActionResultsIdentifySavedObjectsWithoutClaimingSynchronization() throws {
         let output = OutputOptions()
         let value = output.actionResult("mkfolder", data: ["id": "folder-id", "path": "Work", "noteCount": 0, "empty": true, "needsCloudPush": true, "cloudAcknowledged": false, "inCloud": false])

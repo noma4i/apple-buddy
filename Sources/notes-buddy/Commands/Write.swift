@@ -16,7 +16,7 @@ struct New: ParsableCommand {
         """
     )
 
-    @Option(help: "Existing folder name or id") var folder: String
+    @Option(help: "Existing folder name, UUID or unique prefix") var folder: String
     @Option(help: "Title, placed above the body as a heading") var title: String?
     @Option(help: "HTML body file, - for stdin") var html: String?
 
@@ -24,7 +24,7 @@ struct New: ParsableCommand {
         let heading = title.map { "<h1>\(escapeHTML($0))</h1>" } ?? ""
         let body = heading + (try readHTML(from: html))
         let id = try openLocalNotes(readOnly: false).createNote(inFolder: folder, html: body)
-        try output.writeAction("new", noteActionData(id: id, fields: ["created": true]), text: id)
+        try output.writeAction("new", noteActionData(id: id, fields: ["created": true]))
     }
 }
 
@@ -41,11 +41,11 @@ struct Remove: ParsableCommand {
         """
     )
 
-    @Argument(help: "Note id from `ls` or `new`") var id: String
+    @Argument(help: "Note UUID or unique prefix from ls, search or new") var id: String
 
     func run() throws {
         try openLocalNotes(readOnly: false).deleteNote(id)
-        try output.writeAction("rm", noteActionData(id: id, fields: ["deleted": true]), text: id)
+        try output.writeAction("rm", noteActionData(id: id, fields: ["deleted": true]))
     }
 }
 
@@ -62,12 +62,12 @@ struct Move: ParsableCommand {
         """
     )
 
-    @Argument(help: "Note id from `ls` or `new`") var id: String
-    @Option(help: "Target folder name or id") var folder: String
+    @Argument(help: "Note UUID or unique prefix from ls, search or new") var id: String
+    @Option(help: "Target folder name, UUID or unique prefix") var folder: String
 
     func run() throws {
         try openLocalNotes(readOnly: false).moveNote(id, toFolder: folder)
-        try output.writeAction("mv", noteActionData(id: id, fields: ["moved": true]), text: id)
+        try output.writeAction("mv", noteActionData(id: id, fields: ["moved": true]))
     }
 }
 
@@ -80,7 +80,7 @@ struct Pin: ParsableCommand {
     )
 
     func run() throws {
-        try output.writeAction("pin", note.open(readOnly: false).editNote(note.id, operation: "pin", options: [:]), text: note.id)
+        try output.writeAction("pin", note.open(readOnly: false).editNote(note.id, operation: "pin", options: [:]))
     }
 }
 
@@ -93,7 +93,7 @@ struct Unpin: ParsableCommand {
     )
 
     func run() throws {
-        try output.writeAction("unpin", note.open(readOnly: false).editNote(note.id, operation: "unpin", options: [:]), text: note.id)
+        try output.writeAction("unpin", note.open(readOnly: false).editNote(note.id, operation: "unpin", options: [:]))
     }
 }
 
@@ -110,12 +110,12 @@ struct Append: ParsableCommand {
         """
     )
 
-    @Argument(help: "Note id from `ls` or `new`") var id: String
+    @Argument(help: "Note UUID or unique prefix from ls, search or new") var id: String
     @Option(help: "HTML file, - for stdin") var html: String
 
     func run() throws {
         try setNoteBody(id: id, html: try noteBody(id: id) + readHTML(from: html))
-        try output.writeAction("append", noteActionData(id: id, fields: ["updated": true]), text: id)
+        try output.writeAction("append", noteActionData(id: id, fields: ["updated": true]))
     }
 }
 
@@ -134,7 +134,7 @@ struct Replace: ParsableCommand {
         """
     )
 
-    @Argument(help: "Note id from `ls` or `new`") var id: String
+    @Argument(help: "Note UUID or unique prefix from ls, search or new") var id: String
     @Option(help: "Fragment to find, matched against the HTML body") var find: String
     @Option(name: .customLong("with"), help: "Replacement HTML") var replacement: String
     @Flag(help: "Replace every occurrence, otherwise the fragment must occur once") var all = false
@@ -146,7 +146,7 @@ struct Replace: ParsableCommand {
         guard count > 0 else { throw NotesError(description: "fragment not found in the HTML body") }
         guard count == 1 || all else { throw NotesError(description: "fragment occurs \(count) times, use --all") }
         try setNoteBody(id: id, html: body.replacingOccurrences(of: find, with: replacement))
-        try output.writeAction("replace", noteActionData(id: id, fields: ["updated": true]), text: id)
+        try output.writeAction("replace", noteActionData(id: id, fields: ["updated": true]))
     }
 }
 
@@ -157,14 +157,14 @@ struct Attach: ParsableCommand {
         discussion: """
         Adds the file to the end of the note, for example a PDF. Notes shows it inline.
         Works on notes that already have attachments, and does not change the text.
-        Prints the note URL after saving. Notes quits automatically before writing.
+        Prints the note UUID after saving. Notes quits automatically before writing.
 
         EXAMPLE
           nb attach <id> report.pdf
         """
     )
 
-    @Argument(help: "Note id from `ls` or `new`") var id: String
+    @Argument(help: "Note UUID or unique prefix from ls, search or new") var id: String
     @Argument(help: "Path of the file to attach") var file: String
 
     func run() throws {
@@ -174,6 +174,6 @@ struct Attach: ParsableCommand {
         }
         _ = try openLocalNotes(readOnly: false)
             .editNote(id, operation: "attachment-add", options: ["file": url.path])
-        try output.writeAction("attach", noteActionData(id: id, fields: ["file": url.path, "attached": true]), text: id)
+        try output.writeAction("attach", noteActionData(id: id, fields: ["file": url.path, "attached": true]))
     }
 }

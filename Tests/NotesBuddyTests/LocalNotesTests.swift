@@ -82,11 +82,14 @@ final class LocalNotesTests: XCTestCase {
             return (text, error)
         }
         _ = try run(["snapshot-db", container.appendingPathComponent("NoteStore.sqlite").path, "--database", database.path], isolated: false)
+        let publicIDs = try NBNotes(url: database, readOnly: true).publicIdentifiers(forIDs: [noteID, targetID])
+        let publicNoteID = try XCTUnwrap(publicIDs[noteID])
+        let publicTargetID = try XCTUnwrap(publicIDs[targetID])
         let found = try run(["search", "Fixtur", "--field", "title"])
-        XCTAssertEqual(found.0, noteID + "\n")
+        XCTAssertEqual(found.0, publicNoteID + "\n")
         XCTAssertEqual(found.1, "1 of 1 notes\n")
         let listed = try run(["ls", "--folder", "Fixture"])
-        XCTAssertEqual(Set(listed.0.split(separator: "\n").map(String.init)), Set([noteID!, targetID!]))
+        XCTAssertEqual(Set(listed.0.split(separator: "\n").map(String.init)), Set([publicNoteID, publicTargetID]))
         XCTAssertEqual(listed.1, "2 notes\n")
         let empty = try run(["search", "no-match-unique-xyz", "--field", "title"])
         XCTAssertEqual(empty.0, "")
@@ -104,6 +107,37 @@ final class LocalNotesTests: XCTestCase {
         let textStats = try run(["stats", "--folder", "Fixture"])
         XCTAssertTrue(textStats.0.contains("2 notes, 0 deleted notes, 1 folders"))
         XCTAssertTrue(textStats.0.contains("empty=false"))
+        let shown = try run(["show", noteID, "--json"])
+        let shownNote = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(shown.0.utf8)) as? [String: Any])
+        XCTAssertEqual((shownNote["attachments"] as? [Any])?.count, 1)
+        XCTAssertNotNil(shownNote["tags"])
+        XCTAssertNotNil(shownNote["links"])
+        XCTAssertNotNil(shownNote["tables"])
+        let shownHTML = try run(["show", noteID, "--html", "--json"])
+        let htmlNote = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(shownHTML.0.utf8)) as? [String: Any])
+        XCTAssertNotNil(htmlNote["html"])
+        XCTAssertEqual((htmlNote["attachments"] as? [Any])?.count, 1)
+        let plainNote = try run(["show", noteID])
+        XCTAssertTrue(plainNote.0.contains("Attachments:"))
+        XCTAssertTrue(plainNote.0.contains("public.data"))
+        XCTAssertTrue(plainNote.0.contains("not available locally"))
+        let searchAttachment = (value["notes"] as? [[String: Any]])?.first?["attachments"] as? [[String: Any]]
+        XCTAssertEqual(searchAttachment?.count, 1)
+        XCTAssertEqual(searchAttachment?.first?["note"] as? String, publicNoteID)
+        let listedJSON = try run(["ls", "--folder", "Fixture", "--json"])
+        let listedNotes = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(listedJSON.0.utf8)) as? [[String: Any]])
+        XCTAssertEqual((listedNotes.first { $0["id"] as? String == publicNoteID }?["attachments"] as? [Any])?.count, 1)
+        let prefix = String(publicNoteID.prefix(8))
+        XCTAssertEqual(try run(["show", prefix, "--json"]).0, shown.0)
+        let foundID = try run(["search", prefix, "--field", "id"])
+        XCTAssertEqual(foundID.0, publicNoteID + "\n")
+        XCTAssertFalse(shown.0.contains("x-coredata"))
+        let listedNote = try XCTUnwrap(listedNotes.first { $0["id"] as? String == publicNoteID })
+        let searchNote = try XCTUnwrap((value["notes"] as? [[String: Any]])?.first)
+        XCTAssertEqual(listedNote["folder"] as? String, shownNote["folder"] as? String)
+        XCTAssertEqual(searchNote["folder"] as? String, shownNote["folder"] as? String)
+        XCTAssertEqual(listedNote["folderPath"] as? String, "Fixture")
+        XCTAssertEqual(searchNote["folderPath"] as? String, "Fixture")
     }
 
     func testNativeFolderAndNoteLifecyclePreservesRichTextAndTables() throws {
@@ -465,6 +499,89 @@ final class LocalNotesTests: XCTestCase {
         XCTAssertThrowsError(try store.backupAttachmentPaths())
     }
 
+    func testUUIDReferencesResolveUniquePrefixesAndRejectAmbiguityAndWrongEntities() throws {
+        let store = try NBNotes(url: database, readOnly: false)
+        let context = try XCTUnwrap(store.value(forKey: "context") as? NSManagedObjectContext)
+        let ids = try store.publicIdentifiers(forIDs: [noteID])
+        let uuid = try XCTUnwrap(ids[noteID])
+        XCTAssertNotNil(UUID(uuidString: uuid))
+        XCTAssertEqual(try store.canonicalID(forReference: uuid, entity: "ICNote"), noteID)
+        XCTAssertEqual(try store.canonicalID(forReference: String(uuid.prefix(8)), entity: "ICNote"), noteID)
+        XCTAssertThrowsError(try store.canonicalID(forReference: String(uuid.prefix(7)), entity: "ICNote"))
+        XCTAssertThrowsError(try store.canonicalID(forReference: uuid, entity: "ICFolder"))
+        let targetObject = try XCTUnwrap(context.persistentStoreCoordinator?.managedObjectID(forURIRepresentation: URL(string: targetID)!))
+        let target = try context.existingObject(with: targetObject)
+        target.setValue(String(uuid.prefix(8)) + "-0000-0000-0000-000000000000", forKey: "identifier")
+        try context.save()
+        XCTAssertThrowsError(try store.canonicalID(forReference: String(uuid.prefix(8)), entity: "ICNote"))
+        XCTAssertEqual(try store.canonicalID(forReference: uuid, entity: "ICNote"), noteID)
+    }
+
+    func testNoteURLsUseStoredUUIDWithoutLeakingLocalAddresses() throws {
+        let store = try NBNotes(url: database, readOnly: true)
+        let uuid = try XCTUnwrap(store.publicIdentifiers(forIDs: [noteID])[noteID])
+        let expected = "applenotes://showNote?identifier=" + uuid
+        XCTAssertEqual(try store.readNote(noteID)["url"] as? String, expected)
+        XCTAssertEqual(try store.listNotes(inFolder: "Fixture").first { $0["id"] as? String == noteID }?["url"] as? String, expected)
+        let found = try store.search("Fixture", options: ["field": "title"])
+        XCTAssertEqual((found["notes"] as? [[String: Any]])?.first?["url"] as? String, expected)
+    }
+
+    func testSystemFolderUUIDIsStableAndResolvesAfterNoteDeletion() throws {
+        let store = try NBNotes(url: database, readOnly: false)
+        try store.deleteNote(noteID)
+        let context = try XCTUnwrap(store.value(forKey: "context") as? NSManagedObjectContext)
+        let objectID = try XCTUnwrap(context.persistentStoreCoordinator?.managedObjectID(forURIRepresentation: URL(string: noteID)!))
+        let note = try context.existingObject(with: objectID)
+        let folder = try XCTUnwrap(note.value(forKey: "folder") as? NSManagedObject)
+        let account = try XCTUnwrap(folder.value(forKey: "account") as? NSManagedObject)
+        account.setValue("C791CE10-D36A-46E4-AA17-33F0AEB14EDA", forKey: "identifier")
+        folder.setValue("TrashFolder-CloudKit", forKey: "identifier")
+        try context.save()
+        let id = folder.objectID.uriRepresentation().absoluteString
+        let uuid = try XCTUnwrap(store.publicIdentifiers(forIDs: [id])[id])
+        XCTAssertEqual(uuid, "3ADD7A68-84AA-5937-A1A8-EBE726FAE18E")
+        let reopened = try NBNotes(url: database, readOnly: true)
+        XCTAssertEqual(try reopened.publicIdentifiers(forIDs: [id])[id], uuid)
+        XCTAssertEqual(try reopened.canonicalID(forReference: String(uuid.prefix(8)), entity: "ICFolder"), id)
+        let data = try reopened.readNote(noteID)
+        XCTAssertEqual(data["folder"] as? String, id)
+        XCTAssertNotNil(try reopened.publicIdentifiers(forIDs: [noteID])[noteID])
+    }
+
+    func testWebLinksRemainAccessibleAndSearchableWithoutBecomingAttachments() throws {
+        let store = try NBNotes(url: database, readOnly: false)
+        let id = try store.createNote(inFolder: "Fixture", html: "<h1>Web reference</h1><p><a href=\"https://example.test/invoice.pdf\">Invoice PDF</a></p>")
+        let note = try store.readNote(id)
+        let urls = note["urls"] as? [[String: Any]]
+        XCTAssertEqual(urls?.first?["url"] as? String, "https://example.test/invoice.pdf")
+        XCTAssertEqual(urls?.first?["name"] as? String, "Invoice PDF")
+        XCTAssertEqual((note["attachments"] as? [Any])?.count, 0)
+        let found = try store.search("example.test", options: ["field": "link"])
+        XCTAssertEqual((found["notes"] as? [[String: Any]])?.first?["id"] as? String, id)
+        let listed = try store.listNotes(inFolder: "Fixture").first { $0["id"] as? String == id }
+        XCTAssertEqual((listed?["urls"] as? [[String: Any]])?.first?["url"] as? String, "https://example.test/invoice.pdf")
+    }
+
+    func testProtectedNoteListsFilesWithoutOfferingExportOrReadingLinks() throws {
+        let store = try NBNotes(url: database, readOnly: false)
+        let id = try store.createNote(inFolder: "Fixture", html: "<h1>Protected files</h1>")
+        let file = directory.appendingPathComponent("local.txt")
+        try Data("Example file".utf8).write(to: file)
+        _ = try store.editNote(id, operation: "attachment-add", options: ["file": file.path])
+        let context = try XCTUnwrap(store.value(forKey: "context") as? NSManagedObjectContext)
+        let objectID = try XCTUnwrap(context.persistentStoreCoordinator?.managedObjectID(forURIRepresentation: URL(string: id)!))
+        let note = try context.existingObject(with: objectID)
+        note.setValue(true, forKey: "isPasswordProtected")
+        try context.save()
+        let listed = try XCTUnwrap(store.listNotes(inFolder: "Fixture").first { $0["id"] as? String == id })
+        let attachment = try XCTUnwrap((listed["attachments"] as? [[String: Any]])?.first)
+        XCTAssertEqual(attachment["available"] as? Bool, true)
+        XCTAssertEqual(attachment["exportable"] as? Bool, false)
+        XCTAssertTrue(listed["urls"] is NSNull)
+        XCTAssertThrowsError(try store.readNote(id))
+    }
+
     func testPinRejectsReadOnlyProtectedAndForeignNotes() throws {
         let store = try NBNotes(url: database, readOnly: false)
         XCTAssertThrowsError(try NBNotes(url: database, readOnly: true).editNote(noteID, operation: "pin", options: [:]))
@@ -603,6 +720,24 @@ final class LocalNotesTests: XCTestCase {
         XCTAssertEqual(after["tags"] as? NSArray, before["tags"] as? NSArray)
         XCTAssertEqual(after["links"] as? NSArray, before["links"] as? NSArray)
         XCTAssertEqual(after["tables"] as? NSArray, before["tables"] as? NSArray)
+        let session = try MCPTestSession(home: directory)
+        _ = try session.initialize()
+        let uuid = try XCTUnwrap(store.publicIdentifiers(forIDs: [id])[id])
+        let prefix = String(uuid.prefix(8))
+        let shown = try session.request("tools/call", ["name": "show", "arguments": ["id": prefix]])
+        let data = try XCTUnwrap((shown["result"] as? [String: Any])?["structuredContent"] as? [String: Any])
+        XCTAssertEqual(data["id"] as? String, uuid)
+        XCTAssertEqual(data["text"] as? String, before["text"] as? String)
+        XCTAssertEqual((data["attachments"] as? [[String: Any]])?.count, 3)
+        let search = try session.request("tools/call", ["name": "search", "arguments": ["query": "receipt.txt", "field": "attachment"]])
+        let searchData = try XCTUnwrap((search["result"] as? [String: Any])?["structuredContent"] as? [String: Any])
+        XCTAssertEqual((searchData["notes"] as? [[String: Any]])?.first?["id"] as? String, uuid)
+        let attachment = try XCTUnwrap((data["attachments"] as? [[String: Any]])?.first { $0["name"] as? String == "receipt.txt" }?["id"] as? String)
+        let exported = directory.appendingPathComponent("mcp-receipt.txt")
+        let mcpExport = try session.request("tools/call", ["name": "attachments_export", "arguments": ["id": prefix, "attachment": String(attachment.prefix(8)), "file": exported.path]])
+        XCTAssertEqual((mcpExport["result"] as? [String: Any])?["isError"] as? Bool, false)
+        XCTAssertEqual(try Data(contentsOf: exported), Data("receipt.txt".utf8))
+        try session.finish()
     }
 
     func testFormatAndChecklistKeepAttachment() throws {
@@ -781,7 +916,7 @@ final class LocalNotesTests: XCTestCase {
                 let notes = try XCTUnwrap(result["notes"] as? [[String: Any]])
                 XCTAssertEqual(notes.map { $0["id"] as? String }, [id], query)
                 XCTAssertTrue((notes.first?["matchedFields"] as? [String])?.contains("document") == true)
-                if field == "document" { XCTAssertEqual(result["scannedDocuments"] as? Int, 1) }
+                if field == "document" { XCTAssertEqual((result["scannedDocuments"] as? Int ?? 0) + (result["cachedDocuments"] as? Int ?? 0), 1) }
                 XCTAssertEqual((result["documentErrors"] as? [[String: Any]])?.count, 0)
             }
         }
@@ -807,6 +942,43 @@ final class LocalNotesTests: XCTestCase {
         let found = try NBNotes(url: database, readOnly: true).search("quartz receipt", options: [:])
         XCTAssertEqual((found["notes"] as? [[String: Any]])?.first?["id"] as? String, id)
         XCTAssertEqual(found["scannedDocuments"] as? Int, 0)
+    }
+
+    func testDocumentIndexReusesTextAcrossQueriesAndInvalidatesChangedFiles() throws {
+        let store = try NBNotes(url: database, readOnly: false)
+        let pdf = directory.appendingPathComponent("changing.pdf")
+        func writePDF(_ text: String, to url: URL) throws {
+            let view = NSView(frame: NSRect(x: 0, y: 0, width: 800, height: 200))
+            let label = NSTextField(labelWithString: text)
+            label.frame = NSRect(x: 30, y: 100, width: 700, height: 50)
+            view.addSubview(label)
+            try view.dataWithPDF(inside: view.bounds).write(to: url)
+        }
+        try writePDF("QUARTZ RECEIPT 81926", to: pdf)
+        let added = try store.editNote(noteID, operation: "attachment-add", options: ["file": pdf.path])
+        let files = try XCTUnwrap(added["attachments"] as? [[String: Any]])
+        let attachedPath = try XCTUnwrap(files.first { $0["type"] as? String == "com.adobe.pdf" }?["path"] as? String)
+        let first = try store.search("81926", options: ["field": "document"])
+        XCTAssertEqual(first["total"] as? Int, 1)
+        XCTAssertEqual(first["scannedDocuments"] as? Int, 1)
+        let warm = try NBNotes(url: database, readOnly: true).search("quartz", options: ["field": "document"])
+        XCTAssertEqual(warm["total"] as? Int, 1)
+        XCTAssertEqual(warm["scannedDocuments"] as? Int, 0)
+        XCTAssertEqual(warm["cachedDocuments"] as? Int, 1)
+        let index = directory.appendingPathComponent("documents-v1")
+        let entries = try FileManager.default.contentsOfDirectory(at: index, includingPropertiesForKeys: nil)
+        XCTAssertEqual(entries.count, 1)
+        XCTAssertEqual(try FileManager.default.attributesOfItem(atPath: index.path)[.posixPermissions] as? Int, 0o700)
+        XCTAssertEqual(try FileManager.default.attributesOfItem(atPath: entries[0].path)[.posixPermissions] as? Int, 0o600)
+        try writePDF("UPDATED RECEIPT 71635", to: URL(fileURLWithPath: attachedPath))
+        let changed = try store.search("71635", options: ["field": "document"])
+        XCTAssertEqual(changed["total"] as? Int, 1)
+        XCTAssertEqual(changed["scannedDocuments"] as? Int, 1)
+        XCTAssertEqual(try store.search("81926", options: ["field": "document"])["total"] as? Int, 0)
+        try Data("invalid cached JSON".utf8).write(to: entries[0])
+        let recovered = try store.search("71635", options: ["field": "document"])
+        XCTAssertEqual(recovered["total"] as? Int, 1)
+        XCTAssertEqual(recovered["scannedDocuments"] as? Int, 1)
     }
 
     func testFuzzySearchMatchesFilenameWordsWithoutChangingPunctuation() throws {

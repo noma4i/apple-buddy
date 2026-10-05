@@ -9,6 +9,13 @@ final class DocumentTextTests: XCTestCase {
         guard let text = NBReadDocumentText(url, &error) else { throw error ?? NSError(domain: "test", code: 1) }
         return text
     }
+    func testTinyImagesHaveNoRecognizableText() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".png")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let pixels = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 2, pixelsHigh: 2, bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0))
+        try XCTUnwrap(pixels.representation(using: .png, properties: [:])).write(to: url)
+        XCTAssertEqual(try readText(url), "")
+    }
     func testExtractsPDFTextAndRecognizesImageAndScannedPDF() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)

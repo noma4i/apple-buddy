@@ -27,7 +27,7 @@ struct Tables: ParsableCommand {
 private func editTable(id: String, table: TableOption, operation: String, output: OutputOptions, values: [String: Any] = [:]) throws {
     var options = values
     options["table"] = table.index
-    try output.writeAction(operation.replacingOccurrences(of: "table-", with: "table "), openLocalNotes(readOnly: false).editNote(id, operation: operation, options: options), text: id)
+    try output.writeAction(operation.replacingOccurrences(of: "table-", with: "table "), openLocalNotes(readOnly: false).editNote(id, operation: operation, options: options))
 }
 
 struct TableList: ParsableCommand {
@@ -44,7 +44,7 @@ struct TableList: ParsableCommand {
         """
     )
 
-    @Argument(help: "Note id from `ls` or `new`") var id: String
+    @Argument(help: "Note UUID or unique prefix from ls, search or new") var id: String
 
     func run() throws {
         let result = try openLocalNotes(readOnly: true).readNote(id)
@@ -72,7 +72,7 @@ struct TableNew: ParsableCommand {
         """
     )
 
-    @Argument(help: "Note id from `ls` or `new`") var id: String
+    @Argument(help: "Note UUID or unique prefix from ls, search or new") var id: String
     @Option(help: "CSV file, - for stdin") var csv: String?
     @Option(help: "Empty table size as ROWSxCOLUMNS, for example 3x2") var size: String?
 
@@ -89,7 +89,7 @@ struct TableNew: ParsableCommand {
             throw ValidationError("give exactly one of --csv and --size")
         }
         guard !grid.isEmpty else { throw NotesError(description: "the CSV has no rows") }
-        try output.writeAction("table new", openLocalNotes(readOnly: false).editNote(id, operation: "table-new", options: ["rows": grid.count, "columns": grid.map(\.count).max() ?? 0, "grid": grid]), text: id)
+        try output.writeAction("table new", openLocalNotes(readOnly: false).editNote(id, operation: "table-new", options: ["rows": grid.count, "columns": grid.map(\.count).max() ?? 0, "grid": grid]))
     }
 }
 
@@ -106,7 +106,7 @@ struct TableSet: ParsableCommand {
         """
     )
 
-    @Argument(help: "Note id from `ls` or `new`") var id: String
+    @Argument(help: "Note UUID or unique prefix from ls, search or new") var id: String
     @OptionGroup var table: TableOption
     @Option(help: "Row number") var row: Int
     @Option(help: "Column number") var col: Int
@@ -130,7 +130,7 @@ struct TableAddRow: ParsableCommand {
         """
     )
 
-    @Argument(help: "Note id from `ls` or `new`") var id: String
+    @Argument(help: "Note UUID or unique prefix from ls, search or new") var id: String
     @OptionGroup var table: TableOption
     @Option(help: "Position of the new row") var at: Int?
 
@@ -152,7 +152,7 @@ struct TableRemoveRow: ParsableCommand {
         """
     )
 
-    @Argument(help: "Note id from `ls` or `new`") var id: String
+    @Argument(help: "Note UUID or unique prefix from ls, search or new") var id: String
     @OptionGroup var table: TableOption
     @Option(help: "Row number to delete") var row: Int
 
@@ -174,7 +174,7 @@ struct TableAddColumn: ParsableCommand {
         """
     )
 
-    @Argument(help: "Note id from `ls` or `new`") var id: String
+    @Argument(help: "Note UUID or unique prefix from ls, search or new") var id: String
     @OptionGroup var table: TableOption
     @Option(help: "Position of the new column") var at: Int?
 
@@ -196,7 +196,7 @@ struct TableRemoveColumn: ParsableCommand {
         """
     )
 
-    @Argument(help: "Note id from `ls` or `new`") var id: String
+    @Argument(help: "Note UUID or unique prefix from ls, search or new") var id: String
     @OptionGroup var table: TableOption
     @Option(help: "Column number to delete") var col: Int
 

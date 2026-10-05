@@ -150,7 +150,7 @@ struct ImportBear: ParsableCommand {
     static let configuration = CommandConfiguration(commandName: "import-bear", abstract: "Import this user's Bear notes, folders, native tags and attachments", discussion: """
         Imports notes, files and tags into folders matching Bear tag paths. Requires pandoc.
         Reruns skip existing imports. Bear data is never modified.
-        Try --dry-run first. Progress uses stderr. Saved note URLs use stdout.
+        Try --dry-run first. Progress uses stderr. Saved note UUIDs use stdout.
 
         EXAMPLES
           nb import-bear --dry-run
@@ -233,9 +233,9 @@ struct ImportBear: ParsableCommand {
                 }
                 identifiers[note.identifier] = result["id"] as? String
                 if result["imported"] as? Bool == true { imported += 1 } else { skipped += 1 }
-                let record: [String: Any] = ["bear": note.identifier, "notes": result["id"]!, "title": note.title, "folder": note.destination, "files": note.files.count, "imported": result["imported"]!]
+                let record: [String: Any] = ["bear": note.identifier, "id": result["id"]!, "imported": result["imported"]!]
                 records.append(record)
-                FileHandle.standardError.write(Data("Bear \(note.identifier) -> \(result["id"]!)\n".utf8))
+                FileHandle.standardError.write(Data("Bear \(note.identifier) -> \(note.notesIdentifier)\n".utf8))
             }
         }
         var linked = 0
@@ -256,9 +256,15 @@ struct ImportBear: ParsableCommand {
         let reopened = try openLocalNotes(readOnly: true)
         var verifiedFiles = 0
         var verifiedIDs: [String] = []
-        for note in notes {
+        for (index, note) in notes.enumerated() {
             guard let id = identifiers[note.identifier] else { throw NotesError(description: "Missing imported note id") }
-            verifiedFiles += try verifyBearNote(note, state: reopened.readNote(id), digests: digests)
+            let state = try reopened.readNote(id)
+            verifiedFiles += try verifyBearNote(note, state: state, digests: digests)
+            guard var record = state as? [String: Any] else { throw NotesError(description: "Invalid imported note data") }
+            record["bear"] = note.identifier
+            record["imported"] = records[index]["imported"]!
+            record["files"] = note.files.count
+            records[index] = output.actionResult("import-bear", data: record)
             verifiedIDs.append(id)
         }
         FileHandle.standardError.write(Data("Imported: \(imported), skipped: \(skipped), moved: \(moved), linked: \(linked)\n".utf8))

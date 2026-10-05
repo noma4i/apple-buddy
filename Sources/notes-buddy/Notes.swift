@@ -27,9 +27,33 @@ func noteActionData(id: String, fields: [String: Any] = [:]) throws -> [String: 
 
 struct Note: Codable {
     let id: String
+    let url: String
     let title: String
     let folder: String
+    let folderPath: String
     let modified: Date
+    let attachments: [NoteAttachment]
+    let urls: [NoteWebURL]?
+}
+
+struct NoteWebURL: Codable {
+    let name: String
+    let url: String
+    let location: Int
+    let length: Int
+}
+
+struct NoteAttachment: Codable {
+    let id: String
+    let identifier: String
+    let note: String
+    let type: String
+    let name: String
+    let available: Bool
+    let exportable: Bool
+    let viewSize: Int
+    let path: String?
+    let url: String?
 }
 
 func listFolders() throws -> [Folder] {
@@ -44,13 +68,24 @@ func listFolders() throws -> [Folder] {
 
 func listNotes(in folder: Folder) throws -> [Note] {
     try openLocalNotes(readOnly: true).listNotes(inFolder: folder.id).map { value in
-        guard let id = value["id"] as? String, let title = value["title"] as? String, let modified = value["modified"] as? Date else { throw NotesError(description: "Notes returned invalid note data") }
-        return Note(id: id, title: title, folder: folder.name, modified: modified)
+        guard let id = value["id"] as? String, let url = value["url"] as? String, let title = value["title"] as? String, let modified = value["modified"] as? Date,
+              let folderID = value["folder"] as? String, let folderPath = value["folderPath"] as? String else { throw NotesError(description: "Notes returned invalid note data") }
+        guard let items = value["attachments"] as? [[String: Any]] else { throw NotesError(description: "Notes returned invalid attachment data") }
+        let attachments = try JSONDecoder().decode([NoteAttachment].self, from: JSONSerialization.data(withJSONObject: items))
+        guard let links = value["urls"] else { throw NotesError(description: "Notes returned invalid web link data") }
+        let urls = try JSONDecoder().decode([NoteWebURL]?.self, from: JSONSerialization.data(withJSONObject: links, options: [.fragmentsAllowed]))
+        return Note(id: id, url: url, title: title, folder: folderID, folderPath: folderPath, modified: modified, attachments: attachments, urls: urls)
     }
 }
 
 func resolveFolder(named name: String) throws -> Folder {
-    let matches = try listFolders().filter { $0.name == name || $0.id == name }
+    let folders = try listFolders()
+    let named = folders.filter { $0.name == name || $0.id == name }
+    let matches: [Folder]
+    if named.isEmpty {
+        let id = try openLocalNotes(readOnly: true).canonicalID(forReference: name, entity: "ICFolder")
+        matches = folders.filter { $0.id == id }
+    } else { matches = named }
     guard let folder = matches.first else { throw NotesError(description: "folder not found: \(name)") }
     guard matches.count == 1 else { throw NotesError(description: "folder name is ambiguous: \(name)") }
     return folder

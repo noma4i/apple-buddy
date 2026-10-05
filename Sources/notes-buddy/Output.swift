@@ -1,8 +1,10 @@
 import ArgumentParser
 import CoreFoundation
 import Foundation
+import NotesNative
 
 struct OutputOptions: ParsableArguments {
+    private static let idFields: Set<String> = ["id", "note", "folder", "parent", "target", "attachment", "link", "source", "destination"]
     @Flag(help: "Print data as JSON instead of text") var json = false
 
     func actionResult(_ action: String, data: [String: Any]) -> [String: Any] {
@@ -29,10 +31,11 @@ struct OutputOptions: ParsableArguments {
         return details.joined(separator: ", ")
     }
 
-    func writeAction(_ action: String, _ value: Any, text: String) throws {
+    func writeAction(_ action: String, _ value: Any) throws {
         guard let data = value as? [String: Any] else { throw NotesError(description: "Notes returned invalid action data") }
         let result = actionResult(action, data: data)
-        try write(result, text: text)
+        guard let id = result["id"] as? String else { throw NotesError(description: "Notes returned no action UUID") }
+        try write(result, text: id)
         summary(actionSummary(result))
     }
 
@@ -41,25 +44,54 @@ struct OutputOptions: ParsableArguments {
     }
 
     func write(_ value: Any, text: String? = nil) throws {
-        let result = try format(value, text: text)
+        let references = coreDataIDs(in: value)
+        let ids = references.isEmpty ? [:] : try openLocalNotes(readOnly: true).publicIdentifiers(forIDs: Array(references))
+        let data = replaceIDs(in: value, using: ids)
+        let plain = text.map { content in
+            content.components(separatedBy: "\n").map { line in
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                if let uuid = ids[trimmed] { return line.replacingOccurrences(of: trimmed, with: uuid) }
+                if trimmed.hasPrefix("Export: nb ") {
+                    return ids.reduce(line) { $0.replacingOccurrences(of: $1.key, with: $1.value) }
+                }
+                return line
+            }.joined(separator: "\n")
+        }
+        let result = try format(data, text: plain)
         if !result.isEmpty { print(result) }
     }
 
     func format(_ value: Any, text: String? = nil) throws -> String {
         if json {
-            let data = try JSONSerialization.data(withJSONObject: value, options: [.prettyPrinted, .sortedKeys, .fragmentsAllowed])
+            let data = try JSONSerialization.data(withJSONObject: value, options: [.prettyPrinted, .sortedKeys, .fragmentsAllowed, .withoutEscapingSlashes])
             return String(decoding: data, as: UTF8.self)
         }
         return text ?? render(value)
     }
 
     func writeEncodable<T: Encodable>(_ value: T, text: String) throws {
-        guard json else { try write(text, text: text); return }
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         let object = try JSONSerialization.jsonObject(with: encoder.encode(value), options: .fragmentsAllowed)
-        try write(object)
+        try write(object, text: text)
     }
+
+    private func coreDataIDs(in value: Any, key: String? = nil) -> Set<String> {
+        if let fields = value as? [String: Any] {
+            return fields.reduce(into: Set<String>()) { $0.formUnion(coreDataIDs(in: $1.value, key: $1.key)) }
+        }
+        if let items = value as? [Any] { return items.reduce(into: Set<String>()) { $0.formUnion(coreDataIDs(in: $1, key: key)) } }
+        if let id = value as? String, id.hasPrefix("x-coredata://"), Self.idFields.contains(key ?? "id") { return [id] }
+        return []
+    }
+
+    private func replaceIDs(in value: Any, using ids: [String: String], key: String? = nil) -> Any {
+        if let fields = value as? [String: Any] { return fields.reduce(into: [String: Any]()) { $0[$1.key] = replaceIDs(in: $1.value, using: ids, key: $1.key) } }
+        if let items = value as? [Any] { return items.map { replaceIDs(in: $0, using: ids, key: key) } }
+        if let id = value as? String, Self.idFields.contains(key ?? "id"), let uuid = ids[id] { return uuid }
+        return value
+    }
+
 
     private func render(_ value: Any, indent: String = "") -> String {
         if let fields = value as? [String: Any] {

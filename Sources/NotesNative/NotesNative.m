@@ -1,10 +1,12 @@
 #import "NotesNative.h"
+#import "DocumentIndex.h"
 #import <AppKit/AppKit.h>
 #import <CoreData/CoreData.h>
 #import <dlfcn.h>
 #import <PDFKit/PDFKit.h>
 #import <Vision/Vision.h>
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
+#import <CommonCrypto/CommonDigest.h>
 #import <signal.h>
 #import <errno.h>
 
@@ -95,6 +97,7 @@ static NSString *NBRecognizeImage(NSImage *image, NSError **error) {
         if (error) *error = [NSError errorWithDomain:@"notes-buddy" code:1 userInfo:@{NSLocalizedDescriptionKey:@"Cannot decode document image"}];
         return nil;
     }
+    if (CGImageGetWidth(pixels) <= 2 || CGImageGetHeight(pixels) <= 2) return @"";
     VNRecognizeTextRequest *request = [[VNRecognizeTextRequest alloc] init];
     request.recognitionLevel = VNRequestTextRecognitionLevelAccurate;
     request.automaticallyDetectsLanguage = YES;
@@ -191,7 +194,6 @@ NSString *NBReadDocumentText(NSURL *url, NSError **error) {
 - (id)initWithAttributedString:(NSAttributedString *)text replicaID:(NSUUID *)replica;
 - (id)document;
 - (void)replaceWithDocument:(id)document;
-- (NSString *)searchableTextContentWithoutTitle;
 - (void)setNote:(NSManagedObject *)note;
 - (void)convertNSTablesToICTables:(NSMutableAttributedString *)text pasteboardTypes:(NSArray *)types filterPastedAttributes:(BOOL)filter isReadingSelectionFromPasteboard:(BOOL)reading;
 @end
@@ -200,6 +202,7 @@ NSString *NBReadDocumentText(NSURL *url, NSError **error) {
     NSManagedObjectContext *_context;
     BOOL _readOnly;
     BOOL _liveStore;
+    NSURL *_documentIndexURL;
 }
 
 static NSError *NBError(NSString *message) {
@@ -255,6 +258,9 @@ static void NBRequire(BOOL valid, NSString *message) {
         _context.transactionAuthor = @"notes-buddy";
         _context.mergePolicy = NSErrorMergePolicy;
         _readOnly = readOnly;
+        _documentIndexURL = _liveStore
+            ? [NSURL fileURLWithPath:[NSHomeDirectory() stringByAppendingPathComponent:@"Library/Caches/notes-buddy/documents-v1"]]
+            : [url.URLByDeletingLastPathComponent URLByAppendingPathComponent:@"documents-v1"];
         return self;
     } @catch (NSException *exception) {
         if (error) *error = NBError(exception.reason);
@@ -408,12 +414,25 @@ static void NBRequire(BOOL valid, NSString *message) {
     } @catch (NSException *exception) { [_context rollback]; if (error) *error = NBError(exception.reason); return NO; }
 }
 
+- (NSString *)folderPath:(NSManagedObject *)folder {
+    NSMutableArray *names = [NSMutableArray array];
+    NSMutableSet *visited = [NSMutableSet set];
+    for (NSManagedObject *current = folder; current; current = [current parentFolder]) {
+        NBRequire(![visited containsObject:current.objectID], @"Folder hierarchy contains a cycle");
+        [visited addObject:current.objectID];
+        [names insertObject:[current valueForKey:@"title"] ?: @"" atIndex:0];
+    }
+    return [names componentsJoinedByString:@"/"];
+}
+
 - (NSManagedObject *)folder:(NSString *)reference {
+    NSError *error = nil;
+    NSString *canonical = [self canonicalIDForReference:reference entity:@"ICFolder" error:&error];
     NSMutableArray *matches = [NSMutableArray array];
     for (NSManagedObject *folder in [NSClassFromString(@"ICFolder") visibleFoldersInContext:_context]) {
-        if ([folder.objectID.URIRepresentation.absoluteString isEqualToString:reference] || [[folder valueForKey:@"title"] isEqualToString:reference]) [matches addObject:folder];
+        if ([folder.objectID.URIRepresentation.absoluteString isEqualToString:canonical] || [[folder valueForKey:@"title"] isEqualToString:reference]) [matches addObject:folder];
     }
-    NBRequire(matches.count == 1, matches.count ? @"Folder name is ambiguous, use its id" : @"Folder not found");
+    NBRequire(matches.count == 1, matches.count ? @"Folder name is ambiguous, use its id" : error.localizedDescription);
     return matches.firstObject;
 }
 
@@ -447,14 +466,7 @@ static void NBRequire(BOOL valid, NSString *message) {
             NSUInteger noteCount = [counts[key] unsignedIntegerValue];
             NSUInteger deletedCount = [deletedCounts[key] unsignedIntegerValue];
             NSUInteger subfolderCount = [children[key] unsignedIntegerValue];
-            NSMutableArray *names = [NSMutableArray array];
-            NSMutableSet *visited = [NSMutableSet set];
-            for (NSManagedObject *current = folder; current; current = [current parentFolder]) {
-                NBRequire(![visited containsObject:current.objectID], @"Folder hierarchy contains a cycle");
-                [visited addObject:current.objectID];
-                [names insertObject:[current valueForKey:@"title"] ?: @"" atIndex:0];
-            }
-            NSMutableDictionary *value = [@{@"id":key, @"name":[folder valueForKey:@"title"] ?: @"", @"path":[names componentsJoinedByString:@"/"], @"noteCount":@(noteCount), @"deletedNoteCount":@(deletedCount), @"subfolderCount":@(subfolderCount), @"empty":@((BOOL)(noteCount + deletedCount + subfolderCount == 0))} mutableCopy];
+            NSMutableDictionary *value = [@{@"id":key, @"name":[folder valueForKey:@"title"] ?: @"", @"path":[self folderPath:folder], @"noteCount":@(noteCount), @"deletedNoteCount":@(deletedCount), @"subfolderCount":@(subfolderCount), @"empty":@((BOOL)(noteCount + deletedCount + subfolderCount == 0))} mutableCopy];
             NSManagedObject *parent = [folder parentFolder];
             if (parent) value[@"parent"] = parent.objectID.URIRepresentation.absoluteString;
             [result addObject:value];
@@ -473,7 +485,7 @@ static void NBRequire(BOOL valid, NSString *message) {
         NSMutableArray *result = [NSMutableArray array];
         for (NSManagedObject *note in notes) {
             if ([[note valueForKey:@"isDeletedOrInTrash"] boolValue]) continue;
-            [result addObject:@{@"id":note.objectID.URIRepresentation.absoluteString, @"identifier":[note valueForKey:@"identifier"], @"hasDocument":@((BOOL)([[note valueForKey:@"noteData"] valueForKey:@"data"] != nil)), @"title":[note valueForKey:@"title"] ?: @"", @"folder":[folder valueForKey:@"title"] ?: @"", @"modified":[note valueForKey:@"modificationDate"] ?: [NSDate distantPast]}];
+            [result addObject:@{@"id":note.objectID.URIRepresentation.absoluteString, @"url":[self noteURL:note].absoluteString, @"identifier":[note valueForKey:@"identifier"], @"hasDocument":@((BOOL)([[note valueForKey:@"noteData"] valueForKey:@"data"] != nil)), @"title":[note valueForKey:@"title"] ?: @"", @"folder":folder.objectID.URIRepresentation.absoluteString, @"folderPath":[self folderPath:folder], @"modified":[note valueForKey:@"modificationDate"] ?: [NSDate distantPast], @"attachments":[self attachmentDetailsForNote:note], @"urls":[[note valueForKey:@"isPasswordProtected"] boolValue] ? NSNull.null : [self urlDetailsForNote:note]}];
         }
         return result;
     } @catch (NSException *exception) { if (error) *error = NBError(exception.reason); return nil; }
@@ -584,6 +596,18 @@ static void NBRequire(BOOL valid, NSString *message) {
     [note updateDerivedAttributesIfNeeded];
 }
 
+- (NSURL *)noteURL:(NSManagedObject *)note {
+    return [NSURL URLWithString:[@"applenotes://showNote?identifier=" stringByAppendingString:[self publicIdentifierForObject:note]]];
+}
+
+- (NSDictionary *)noteOpenDetails:(NSString *)identifier error:(NSError **)error {
+    @try {
+        NSManagedObject *note = [self note:identifier error:error];
+        if (!note) return nil;
+        return @{@"id":note.objectID.URIRepresentation.absoluteString, @"title":[note valueForKey:@"title"] ?: @"", @"url":[self noteURL:note].absoluteString};
+    } @catch (NSException *exception) { if (error) *error = NBError(exception.reason); return nil; }
+}
+
 - (NSString *)htmlForNote:(NSString *)identifier error:(NSError **)error {
     @try { NSManagedObject *note = [self note:identifier error:error]; return note ? [note htmlString] : nil; }
     @catch (NSException *exception) { if (error) *error = NBError(exception.reason); return nil; }
@@ -600,8 +624,69 @@ static void NBRequire(BOOL valid, NSString *message) {
     } @catch (NSException *exception) { [_context rollback]; if (error) *error = NBError(exception.reason); return NO; }
 }
 
+- (NSString *)publicIdentifierForObject:(NSManagedObject *)object {
+    NSString *identifier = [object valueForKey:@"identifier"];
+    if ([[NSUUID alloc] initWithUUIDString:identifier]) return identifier;
+    NBRequire([object.entity.name isEqualToString:@"ICFolder"] && identifier.length > 0, @"Notes object has no valid UUID");
+    NSUUID *account = [[NSUUID alloc] initWithUUIDString:[[object valueForKey:@"account"] valueForKey:@"identifier"]];
+    NBRequire(account != nil, @"System folder account has no valid UUID");
+    uuid_t namespace;
+    [account getUUIDBytes:namespace];
+    NSMutableData *name = [NSMutableData dataWithBytes:namespace length:sizeof(namespace)];
+    [name appendData:[identifier dataUsingEncoding:NSUTF8StringEncoding]];
+    unsigned char digest[CC_SHA1_DIGEST_LENGTH];
+    CC_SHA1(name.bytes, (CC_LONG)name.length, digest);
+    digest[6] = (digest[6] & 0x0F) | 0x50;
+    digest[8] = (digest[8] & 0x3F) | 0x80;
+    return [[NSUUID alloc] initWithUUIDBytes:digest].UUIDString;
+}
+
+- (NSDictionary<NSString *, NSString *> *)publicIdentifiersForIDs:(NSArray<NSString *> *)identifiers error:(NSError **)error {
+    @try {
+        NSMutableDictionary *result = [NSMutableDictionary dictionary];
+        for (NSString *identifier in identifiers) {
+            NSManagedObjectID *objectID = [_context.persistentStoreCoordinator managedObjectIDForURIRepresentation:[NSURL URLWithString:identifier]];
+            NBRequire(objectID != nil, @"Object id does not belong to this Notes database");
+            NBRequire([objectID.URIRepresentation.absoluteString isEqualToString:identifier], @"Invalid object id");
+            NSManagedObject *object = [_context existingObjectWithID:objectID error:error];
+            if (!object) return nil;
+            result[identifier] = [self publicIdentifierForObject:object];
+        }
+        return result;
+    } @catch (NSException *exception) { if (error) *error = NBError(exception.reason); return nil; }
+}
+
+- (NSString *)canonicalIDForReference:(NSString *)reference entity:(NSString *)entity error:(NSError **)error {
+    @try {
+        if ([reference hasPrefix:@"x-coredata://"]) {
+            NSManagedObjectID *objectID = [_context.persistentStoreCoordinator managedObjectIDForURIRepresentation:[NSURL URLWithString:reference]];
+            NBRequire(objectID != nil, @"Object id does not belong to this Notes database");
+            NBRequire([objectID.URIRepresentation.absoluteString isEqualToString:reference], @"Invalid object id");
+            NBRequire([objectID.entity.name isEqualToString:entity] || ([entity isEqualToString:@"ICAttachment"] && [objectID.entity.name isEqualToString:@"ICInlineAttachment"]), @"ID belongs to another object type");
+            return objectID.URIRepresentation.absoluteString;
+        }
+        NSRegularExpression *pattern = [NSRegularExpression regularExpressionWithPattern:@"^[0-9a-fA-F]{8}[0-9a-fA-F-]{0,28}$" options:0 error:nil];
+        NBRequire([pattern numberOfMatchesInString:reference options:0 range:NSMakeRange(0, reference.length)] == 1, @"Use a UUID or its unique prefix of at least 8 characters");
+        NSFetchRequest *request = [NSFetchRequest fetchRequestWithEntityName:entity];
+        BOOL folders = [entity isEqualToString:@"ICFolder"];
+        request.predicate = folders ? [NSPredicate predicateWithFormat:@"identifier != nil"] : [NSPredicate predicateWithFormat:@"identifier BEGINSWITH[c] %@", reference];
+        request.fetchLimit = folders ? 0 : 2;
+        NSArray *objects = [_context executeFetchRequest:request error:error];
+        if (!objects) return nil;
+        NSMutableArray *matches = [NSMutableArray array];
+        for (NSManagedObject *object in objects) {
+            if ([[[self publicIdentifierForObject:object] lowercaseString] hasPrefix:reference.lowercaseString]) [matches addObject:object];
+            if (matches.count == 2) break;
+        }
+        NBRequire(matches.count == 1, matches.count ? @"ID prefix is ambiguous, use more UUID characters" : @"UUID not found for this object type");
+        return [matches.firstObject objectID].URIRepresentation.absoluteString;
+    } @catch (NSException *exception) { if (error) *error = NBError(exception.reason); return nil; }
+}
+
 - (NSManagedObject *)note:(NSString *)identifier error:(NSError **)error {
-    NSURL *url = [NSURL URLWithString:identifier];
+    NSString *canonical = [self canonicalIDForReference:identifier entity:@"ICNote" error:error];
+    if (!canonical) return nil;
+    NSURL *url = [NSURL URLWithString:canonical];
     NSManagedObjectID *objectID = url ? [_context.persistentStoreCoordinator managedObjectIDForURIRepresentation:url] : nil;
     if (!objectID || ![objectID.entity.name isEqualToString:@"ICNote"]) {
         if (error) *error = NBError(@"Note id does not belong to this Notes database");
@@ -634,6 +719,46 @@ static void NBRequire(BOOL valid, NSString *message) {
     return ordered;
 }
 
+- (NSDictionary *)attachmentDetails:(NSManagedObject *)attachment note:(NSManagedObject *)note {
+    NSURL *file = [attachment fileURL];
+    BOOL available = file && [file checkResourceIsReachableAndReturnError:nil];
+    NSMutableDictionary *item = [@{
+        @"id":attachment.objectID.URIRepresentation.absoluteString,
+        @"identifier":[attachment valueForKey:@"identifier"],
+        @"note":note.objectID.URIRepresentation.absoluteString,
+        @"type":[attachment valueForKey:@"typeUTI"] ?: @"",
+        @"name":file.lastPathComponent ?: @"",
+        @"available":@(available),
+        @"exportable":@((BOOL)(available && ![[attachment valueForKey:@"isTable"] boolValue] && ![[note valueForKey:@"isPasswordProtected"] boolValue])),
+        @"viewSize":[attachment valueForKey:@"preferredViewSize"]
+    } mutableCopy];
+    if (file) {
+        item[@"path"] = file.path;
+        item[@"url"] = file.absoluteString;
+    }
+    return item;
+}
+
+- (NSArray *)urlDetailsForNote:(NSManagedObject *)note {
+    NSAttributedString *text = [[note mergeableString] attributedString];
+    NSMutableArray *urls = [NSMutableArray array];
+    [text enumerateAttribute:NSLinkAttributeName inRange:NSMakeRange(0, text.length) options:0 usingBlock:^(id value, NSRange range, BOOL *stop) {
+        if (!value) return;
+        NSString *url = [value isKindOfClass:NSURL.class] ? [value absoluteString] : [value description];
+        [urls addObject:@{@"url":url, @"name":[text.string substringWithRange:range], @"location":@(range.location), @"length":@(range.length)}];
+    }];
+    return urls;
+}
+
+- (NSArray *)attachmentDetailsForNote:(NSManagedObject *)note {
+    NSArray *attachments = [[note valueForKey:@"isPasswordProtected"] boolValue]
+        ? [[note visibleTopLevelAttachments] sortedArrayUsingDescriptors:@[[NSSortDescriptor sortDescriptorWithKey:@"identifier" ascending:YES]]]
+        : [self attachmentsInNote:note];
+    NSMutableArray *items = [NSMutableArray array];
+    for (NSManagedObject *attachment in attachments) [items addObject:[self attachmentDetails:attachment note:note]];
+    return items;
+}
+
 - (NSArray<NSString *> *)backupAttachmentPaths:(NSError **)error {
     @try {
         NSFetchRequest *request = [NSFetchRequest fetchRequestWithEntityName:@"ICNote"];
@@ -651,7 +776,7 @@ static void NBRequire(BOOL valid, NSString *message) {
                 NSString *type = [attachment valueForKey:@"typeUTI"];
                 BOOL storedDrawing = [attachment isDrawing] && [[attachment valueForKey:@"mergeableData"] length] > 0;
                 BOOL needsFile = !storedDrawing && ([attachment isImage] || [attachment isDrawing] || [attachment isAudio] || [attachment isScannedDocument] || [type isEqualToString:@"com.adobe.pdf"] || [type hasPrefix:@"public."]);
-                NBRequire(!needsFile || file != nil, [NSString stringWithFormat:@"Attachment %@ (%@) has no local file, no complete backup created", attachment.objectID.URIRepresentation.absoluteString, type]);
+                NBRequire(!needsFile || file != nil, [NSString stringWithFormat:@"Attachment %@ (%@), note %@, has no local file, no complete backup created", [attachment valueForKey:@"identifier"], type, [note valueForKey:@"identifier"]]);
                 if (file) {
                     NBRequire([file checkResourceIsReachableAndReturnError:nil], @"A note attachment is unavailable locally, a complete backup is unavailable");
                     [paths addObject:file.path];
@@ -665,42 +790,29 @@ static void NBRequire(BOOL valid, NSString *message) {
     }
 }
 
-- (NSDictionary *)describeNote:(NSManagedObject *)note {
-    NSMutableArray *folderNames = [NSMutableArray array];
-    NSMutableSet *visitedFolders = [NSMutableSet set];
-    NSManagedObject *noteFolder = [note valueForKey:@"folder"];
-    for (NSManagedObject *folder = noteFolder; folder; folder = [folder parentFolder]) {
-        NBRequire(![visitedFolders containsObject:folder.objectID], @"Folder hierarchy contains a cycle");
-        [visitedFolders addObject:folder.objectID];
-        [folderNames insertObject:[folder valueForKey:@"title"] ?: @"" atIndex:0];
+- (NSArray *)tableRowsForAttachment:(NSManagedObject *)attachment {
+    id table = [[attachment tableModel] table];
+    NSMutableArray *rows = [NSMutableArray array];
+    for (NSUInteger r = 0; r < [table rowCount]; r++) {
+        NSMutableArray *cells = [NSMutableArray array];
+        for (NSUInteger c = 0; c < [table columnCount]; c++) {
+            id value = [table stringForColumnIndex:c rowIndex:r];
+            [cells addObject:value == nil ? @"" : ([value isKindOfClass:NSString.class] ? value : [value string])];
+        }
+        [rows addObject:cells];
     }
+    return rows;
+}
+
+- (NSDictionary *)describeNote:(NSManagedObject *)note {
+    NSManagedObject *noteFolder = [note valueForKey:@"folder"];
     NSMutableArray *attachments = [NSMutableArray array];
     NSMutableArray *tables = [NSMutableArray array];
     BOOL hasNonTableAttachment = NO;
     for (NSManagedObject *attachment in [self attachmentsInNote:note]) {
-        NSURL *file = [attachment fileURL];
-        NSMutableDictionary *item = [@{
-            @"id":attachment.objectID.URIRepresentation.absoluteString,
-            @"identifier":[attachment valueForKey:@"identifier"],
-            @"type":[attachment valueForKey:@"typeUTI"] ?: @"",
-            @"name":file.lastPathComponent ?: @"",
-            @"available":@([file checkResourceIsReachableAndReturnError:nil]),
-            @"viewSize":[attachment valueForKey:@"preferredViewSize"]
-        } mutableCopy];
-        if (file) item[@"path"] = file.path;
-        [attachments addObject:item];
+        [attachments addObject:[self attachmentDetails:attachment note:note]];
         if ([[attachment valueForKey:@"isTable"] boolValue]) {
-            id table = [[attachment tableModel] table];
-            NSMutableArray *rows = [NSMutableArray array];
-            for (NSUInteger r = 0; r < [table rowCount]; r++) {
-                NSMutableArray *cells = [NSMutableArray array];
-                for (NSUInteger c = 0; c < [table columnCount]; c++) {
-                    id value = [table stringForColumnIndex:c rowIndex:r];
-                    [cells addObject:value == nil ? @"" : ([value isKindOfClass:NSString.class] ? value : [value string])];
-                }
-                [rows addObject:cells];
-            }
-            [tables addObject:rows];
+            [tables addObject:[self tableRowsForAttachment:attachment]];
         } else {
             hasNonTableAttachment = YES;
         }
@@ -743,9 +855,10 @@ static void NBRequire(BOOL valid, NSString *message) {
     }];
     return @{
         @"id":note.objectID.URIRepresentation.absoluteString,
+        @"url":[self noteURL:note].absoluteString,
         @"title":[note valueForKey:@"title"] ?: @"",
         @"folder":noteFolder.objectID.URIRepresentation.absoluteString ?: @"",
-        @"folderPath":[folderNames componentsJoinedByString:@"/"],
+        @"folderPath":[self folderPath:noteFolder],
         @"pinned":@([[note valueForKey:@"isPinned"] boolValue]),
         @"needsCloudPush":[note valueForKey:@"needsToBePushedToCloud"],
         @"inCloud":[note valueForKey:@"isInCloud"],
@@ -755,6 +868,7 @@ static void NBRequire(BOOL valid, NSString *message) {
         @"attachments":attachments,
         @"tags":tags,
         @"links":links,
+        @"urls":[self urlDetailsForNote:note],
         @"runs":runs,
         @"tables":tables
     };
@@ -809,8 +923,11 @@ static void NBRequire(BOOL valid, NSString *message) {
 }
 
 - (NSManagedObject *)attachment:(NSString *)identifier inNote:(NSManagedObject *)note {
+    NSError *error = nil;
+    NSString *canonical = [self canonicalIDForReference:identifier entity:@"ICAttachment" error:&error];
+    NBRequire(canonical != nil, error.localizedDescription);
     for (NSManagedObject *attachment in [self attachmentsInNote:note]) {
-        if ([attachment.objectID.URIRepresentation.absoluteString isEqualToString:identifier]) return attachment;
+        if ([attachment.objectID.URIRepresentation.absoluteString isEqualToString:canonical]) return attachment;
     }
     NBRequire(NO, @"Attachment not found in this note");
     return nil;
@@ -976,43 +1093,65 @@ static void NBRequire(BOOL valid, NSString *message) {
         NBRequire([@[@"all", @"id", @"title", @"text", @"attachment", @"tag", @"link", @"document"] containsObject:field], @"Unknown search field");
         NBRequire(limit > 0 && offset >= 0, @"Limit must be positive and offset nonnegative");
         query = NBSearchText(query);
+        if ([query hasPrefix:@"x-coredata://"]) {
+            NSManagedObjectID *objectID = [_context.persistentStoreCoordinator managedObjectIDForURIRepresentation:[NSURL URLWithString:query]];
+            NSManagedObject *object = objectID ? [_context existingObjectWithID:objectID error:nil] : nil;
+            if (object && [objectID.URIRepresentation.absoluteString isEqualToString:query] && [object.entity.name isEqualToString:@"ICNote"]) query = [object valueForKey:@"identifier"];
+        }
         NSRegularExpression *approximate = [NSRegularExpression regularExpressionWithPattern:NBSearchPattern(query) options:NSRegularExpressionCaseInsensitive error:error];
         if (!approximate) return nil;
+        NSManagedObject *selectedFolder = options[@"folder"] ? [self folder:options[@"folder"]] : nil;
         NSFetchRequest *request = [NSFetchRequest fetchRequestWithEntityName:@"ICNote"];
         request.sortDescriptors = @[[NSSortDescriptor sortDescriptorWithKey:@"modificationDate" ascending:NO], [NSSortDescriptor sortDescriptorWithKey:@"identifier" ascending:YES]];
         NSArray *notes = [_context executeFetchRequest:request error:error];
         if (!notes) return nil;
-        NSMutableArray *matches = [NSMutableArray array];
-        NSMutableArray *fuzzyMatches = [NSMutableArray array];
+        NSMutableArray *records = [NSMutableArray array];
+        NSMutableOrderedSet<NSURL *> *files = [NSMutableOrderedSet orderedSet];
         NSUInteger protectedCount = 0;
         NSUInteger unavailableDocuments = 0;
         NSUInteger scannedDocuments = 0;
+        NSUInteger cachedDocuments = 0;
         NSMutableArray *documentErrors = [NSMutableArray array];
         for (NSManagedObject *note in notes) {
             if ([[note valueForKey:@"isDeletedOrInTrash"] boolValue]) continue;
-            NSString *folder = [[note valueForKey:@"folder"] valueForKey:@"title"] ?: @"";
-            if (options[@"folder"] && ![folder isEqualToString:options[@"folder"]] && ![[[note valueForKey:@"folder"] objectID].URIRepresentation.absoluteString isEqualToString:options[@"folder"]]) continue;
+            if (selectedFolder && ![[note valueForKey:@"folder"] isEqual:selectedFolder]) continue;
             if ([[note valueForKey:@"isPasswordProtected"] boolValue]) { protectedCount++; continue; }
             NSString *identifier = note.objectID.URIRepresentation.absoluteString;
-            readingIdentifier = identifier;
-            NSString *title = [note valueForKey:@"title"] ?: @"";
-            NSMutableDictionary *values = [@{@"id":identifier, @"title":title} mutableCopy];
+            readingIdentifier = [note valueForKey:@"identifier"];
+            NSMutableDictionary *values = [@{@"id":[note valueForKey:@"identifier"], @"title":[note valueForKey:@"title"] ?: @""} mutableCopy];
+            NSMutableArray *documents = [NSMutableArray array];
+            NSMutableArray *documentFiles = [NSMutableArray array];
             if (![@[@"id", @"title"] containsObject:field]) {
-                NSDictionary *description = [self describeNote:note];
-                NSMutableArray *text = [NSMutableArray arrayWithObject:description[@"text"]];
-                for (NSArray *table in description[@"tables"]) for (NSArray *row in table) [text addObjectsFromArray:row];
-                values[@"text"] = [text componentsJoinedByString:@"\n"];
-                for (NSString *key in @[@"attachment", @"tag", @"link"]) {
-                    NSArray *items = description[[key stringByAppendingString:@"s"]];
-                    values[key] = [[items valueForKey:@"name"] componentsJoinedByString:@"\n"];
+                NSArray *attachments = [self attachmentsInNote:note];
+                BOOL all = [field isEqualToString:@"all"];
+                if (all || [field isEqualToString:@"text"]) {
+                    NSMutableArray *text = [NSMutableArray arrayWithObject:[[note mergeableString] attributedString].string ?: @""];
+                    for (NSManagedObject *attachment in attachments) {
+                        if ([[attachment valueForKey:@"isTable"] boolValue]) {
+                            for (NSArray *row in [self tableRowsForAttachment:attachment]) [text addObjectsFromArray:row];
+                        }
+                    }
+                    values[@"text"] = [text componentsJoinedByString:@"\n"];
                 }
-                if ([field isEqualToString:@"all"] || [field isEqualToString:@"document"]) {
-                    NSMutableArray *documents = [NSMutableArray array];
-                    for (NSManagedObject *attachment in [self attachmentsInNote:note]) {
+                if (all || [field isEqualToString:@"attachment"]) {
+                    NSMutableArray *names = [NSMutableArray array];
+                    for (NSManagedObject *attachment in attachments) [names addObject:[attachment fileURL].lastPathComponent ?: @""];
+                    values[@"attachment"] = [names componentsJoinedByString:@"\n"];
+                }
+                if (all || [@[@"tag", @"link"] containsObject:field]) {
+                    NSMutableArray *tags = [NSMutableArray array], *links = [NSMutableArray array];
+                    for (NSManagedObject *attachment in [note visibleInlineAttachments]) {
+                        if ([[attachment valueForKey:@"isHashtagAttachment"] boolValue]) [tags addObject:[attachment valueForKey:@"displayText"] ?: @""];
+                        if ([[attachment valueForKey:@"isLinkAttachment"] boolValue]) [links addObject:[attachment valueForKey:@"displayText"] ?: @""];
+                    }
+                    for (NSDictionary *url in [self urlDetailsForNote:note]) { [links addObject:url[@"name"]]; [links addObject:url[@"url"]]; }
+                    values[@"tag"] = [tags componentsJoinedByString:@"\n"];
+                    values[@"link"] = [links componentsJoinedByString:@"\n"];
+                }
+                if (all || [field isEqualToString:@"document"]) {
+                    for (NSManagedObject *attachment in attachments) {
                         if ([[attachment valueForKey:@"isTable"] boolValue]) continue;
                         NSMutableArray *indexedParts = [NSMutableArray array];
-                        NSString *indexed = [attachment searchableTextContentWithoutTitle];
-                        if (indexed.length) [indexedParts addObject:indexed];
                         for (NSString *key in @[@"ocrSummary", @"handwritingSummary", @"imageClassificationSummary", @"summary"]) {
                             NSString *value = [attachment valueForKey:key];
                             if ([value isKindOfClass:NSString.class] && value.length) [indexedParts addObject:value];
@@ -1023,14 +1162,33 @@ static void NBRequire(BOOL valid, NSString *message) {
                         UTType *type = [UTType typeWithIdentifier:[attachment valueForKey:@"typeUTI"]];
                         if (![type conformsToType:UTTypePDF] && ![type conformsToType:UTTypeImage]) continue;
                         if ([field isEqualToString:@"all"] && [NBSearchText([indexedParts componentsJoinedByString:@"\n"]) rangeOfString:query options:NSCaseInsensitiveSearch].location != NSNotFound) continue;
-                        NSError *extractionError = nil;
-                        NSString *content = NBReadDocumentText(file, &extractionError);
-                        if (content) { [documents addObject:content]; scannedDocuments++; }
-                        else [documentErrors addObject:@{@"note":identifier, @"attachment":attachment.objectID.URIRepresentation.absoluteString, @"error":extractionError.localizedDescription ?: @"Could not extract document text"}];
+                        [files addObject:file];
+                        [documentFiles addObject:@{@"file":file, @"note":readingIdentifier, @"attachment":[self publicIdentifierForObject:attachment]}];
                     }
-                    values[@"document"] = [documents componentsJoinedByString:@"\n"];
                 }
             }
+            [records addObject:@{@"note":note, @"id":identifier, @"values":values, @"documents":documents, @"files":documentFiles}];
+        }
+        NSArray *indexed = NBIndexDocuments(files.array, _documentIndexURL);
+        NSMutableDictionary *documentsByFile = [NSMutableDictionary dictionary];
+        for (NSUInteger index = 0; index < files.count; index++) {
+            NSDictionary *document = indexed[index];
+            documentsByFile[files[index]] = document;
+            if ([document[@"cached"] boolValue]) cachedDocuments++;
+            else if (document[@"text"]) scannedDocuments++;
+        }
+        NSMutableArray *matches = [NSMutableArray array], *fuzzyMatches = [NSMutableArray array];
+        for (NSDictionary *record in records) {
+            NSManagedObject *note = record[@"note"];
+            readingIdentifier = [note valueForKey:@"identifier"];
+            NSMutableDictionary *values = record[@"values"];
+            NSMutableArray *documents = record[@"documents"];
+            for (NSDictionary *file in record[@"files"]) {
+                NSDictionary *document = documentsByFile[file[@"file"]];
+                if (document[@"text"]) [documents addObject:document[@"text"]];
+                else [documentErrors addObject:@{@"note":file[@"note"], @"attachment":file[@"attachment"], @"error":document[@"error"]}];
+            }
+            values[@"document"] = [documents componentsJoinedByString:@"\n"];
             NSMutableArray *fields = [NSMutableArray array];
             NSString *excerpt = @"";
             NSInteger bestMatch = 2;
@@ -1054,12 +1212,17 @@ static void NBRequire(BOOL valid, NSString *message) {
                     excerpt = [value substringWithRange:preview];
                 }
             }
-            if (fields.count) [(bestMatch == 0 ? matches : fuzzyMatches) addObject:@{@"id":identifier, @"title":title, @"folder":folder, @"matchedFields":fields, @"excerpt":excerpt, @"matchType":bestMatch == 0 ? @"exact" : @"fuzzy"}];
+            if (fields.count) [(bestMatch == 0 ? matches : fuzzyMatches) addObject:[@{@"id":record[@"id"], @"note":note, @"matchedFields":fields, @"excerpt":excerpt, @"matchType":bestMatch == 0 ? @"exact" : @"fuzzy"} mutableCopy]];
         }
         [matches addObjectsFromArray:fuzzyMatches];
         NSUInteger start = MIN((NSUInteger)offset, matches.count);
         NSArray *page = [matches subarrayWithRange:NSMakeRange(start, MIN((NSUInteger)limit, matches.count - start))];
-        return @{@"notes":page, @"total":@(matches.count), @"offset":@(offset), @"limit":@(limit), @"skippedProtected":@(protectedCount), @"unavailableDocuments":@(unavailableDocuments), @"scannedDocuments":@(scannedDocuments), @"documentErrors":documentErrors};
+        for (NSMutableDictionary *item in page) {
+            NSManagedObject *note = item[@"note"], *folder = [note valueForKey:@"folder"];
+            [item removeObjectForKey:@"note"];
+            [item addEntriesFromDictionary:@{@"url":[self noteURL:note].absoluteString, @"title":[note valueForKey:@"title"] ?: @"", @"folder":folder.objectID.URIRepresentation.absoluteString ?: @"", @"folderPath":[self folderPath:folder], @"attachments":[self attachmentDetailsForNote:note], @"urls":[self urlDetailsForNote:note]}];
+        }
+        return @{@"notes":page, @"total":@(matches.count), @"offset":@(offset), @"limit":@(limit), @"skippedProtected":@(protectedCount), @"unavailableDocuments":@(unavailableDocuments), @"scannedDocuments":@(scannedDocuments), @"cachedDocuments":@(cachedDocuments), @"documentErrors":documentErrors};
     } @catch (NSException *exception) {
         if (error) *error = NBError(readingIdentifier ? [NSString stringWithFormat:@"Could not read note %@: %@", readingIdentifier, exception.reason] : exception.reason);
         return nil;
@@ -1123,9 +1286,11 @@ static void NBRequire(BOOL valid, NSString *message) {
             if (replaced.location != NSNotFound) [document deleteCharactersInRange:replaced];
             [document insertAttributedString:[self marker:link] atIndex:position];
         } else if ([operation isEqualToString:@"link-remove"]) {
+            NSString *linkID = [self canonicalIDForReference:options[@"link"] entity:@"ICInlineAttachment" error:error];
+            if (!linkID) return nil;
             NSManagedObject *found = nil;
             for (NSManagedObject *link in [note visibleInlineAttachments]) {
-                if ([[link valueForKey:@"isLinkAttachment"] boolValue] && [link.objectID.URIRepresentation.absoluteString isEqualToString:options[@"link"]]) { found = link; break; }
+                if ([[link valueForKey:@"isLinkAttachment"] boolValue] && [link.objectID.URIRepresentation.absoluteString isEqualToString:linkID]) { found = link; break; }
             }
             NBRequire(found != nil, @"Link not found in this note");
             [self removeMarkers:found fromDocument:document];

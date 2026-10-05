@@ -4,7 +4,7 @@ import Foundation
 import NotesNative
 
 struct LocalNoteOptions: ParsableArguments {
-    @Argument(help: "Note id from ls or new") var id: String
+    @Argument(help: "Note UUID or unique prefix from ls, search or new") var id: String
 
     func open(readOnly: Bool) throws -> NBNotes {
         try openLocalNotes(readOnly: readOnly)
@@ -62,7 +62,7 @@ struct Edit: ParsableCommand {
 
     func run() throws {
         let store = try note.open(readOnly: false)
-        try output.writeAction("edit", store.editNote(note.id, operation: "replace", options: ["find": find, "replacement": replacement, "all": all]), text: note.id)
+        try output.writeAction("edit", store.editNote(note.id, operation: "replace", options: ["find": find, "replacement": replacement, "all": all]))
     }
 }
 
@@ -76,7 +76,7 @@ struct Insert: ParsableCommand {
     func run() throws {
         var options = try position.values()
         options["text"] = text
-        try output.writeAction("insert", note.open(readOnly: false).editNote(note.id, operation: "insert", options: options), text: note.id)
+        try output.writeAction("insert", note.open(readOnly: false).editNote(note.id, operation: "insert", options: options))
     }
 }
 
@@ -91,7 +91,7 @@ struct Format: ParsableCommand {
     @Flag(help: "Format all occurrences") var all = false
 
     func run() throws {
-        try output.writeAction("format", note.open(readOnly: false).editNote(note.id, operation: "format", options: ["find": find, "style": style, "off": off, "checked": checked, "all": all]), text: note.id)
+        try output.writeAction("format", note.open(readOnly: false).editNote(note.id, operation: "format", options: ["find": find, "style": style, "off": off, "checked": checked, "all": all]))
     }
 }
 
@@ -105,18 +105,27 @@ struct Tags: ParsableCommand {
     func run() throws {
         guard add == nil || remove == nil else { throw ValidationError("choose either --add or --remove") }
         let store = try note.open(readOnly: add == nil && remove == nil)
-        if let add { return try output.writeAction("tags add", store.editNote(note.id, operation: "tag-add", options: ["name": add]), text: note.id) }
-        if let remove { return try output.writeAction("tags rm", store.editNote(note.id, operation: "tag-remove", options: ["name": remove]), text: note.id) }
-        try output.write(["tags": store.readNote(note.id)["tags"]!])
+        if let add { return try output.writeAction("tags add", store.editNote(note.id, operation: "tag-add", options: ["name": add])) }
+        if let remove { return try output.writeAction("tags rm", store.editNote(note.id, operation: "tag-remove", options: ["name": remove])) }
+        let data = try store.readNote(note.id)
+        try output.write(["id": data["id"]!, "tags": data["tags"]!])
     }
 }
 
 struct Attachments: ParsableCommand {
     @OptionGroup var output: OutputOptions
-    enum Action: String, ExpressibleByArgument { case ls, export, add, rm, replace, mv, view }
+    enum Action: String, CaseIterable, ExpressibleByArgument { case ls, export, add, rm, replace, mv, view }
+    static let optionsForActions: [String: Set<Action>] = [
+        "attachment": [.export, .rm, .replace, .mv, .view], "file": [.export, .add, .replace],
+        "directory": [.export], "to": [.mv], "size": [.view], "before": [.add, .mv], "after": [.add, .mv]
+    ]
+    static let requiredOptionsForActions: [Action: Set<String>] = [
+        .add: ["file"], .rm: ["attachment"], .replace: ["attachment", "file"],
+        .mv: ["attachment", "to"], .view: ["attachment", "size"]
+    ]
     static let configuration = CommandConfiguration(abstract: "List, export, add, remove, replace, move or resize note attachments", discussion: """
         Get attachment ids with ls. Export before rm to keep a copy.
-        Edits print the note URL. Export prints the saved path.
+        Edits print the note UUID. Export prints the saved path.
 
         EXAMPLES
           nb attachments ls <id>
@@ -127,23 +136,17 @@ struct Attachments: ParsableCommand {
     @Argument(help: "ls, export, add, rm, replace, mv, view") var action: Action
     @OptionGroup var note: LocalNoteOptions
     @OptionGroup var position: PositionOptions
-    @Option(help: "Attachment id from inspect or attachments ls") var attachment: String?
+    @Option(help: "Attachment UUID or unique prefix from show or attachments ls") var attachment: String?
     @Option(help: "Input file for add or replace, output file for export") var file: String?
     @Option(help: "Export all files, or the selected attachment, into this directory") var directory: String?
-    @Option(help: "Destination note id for mv") var to: String?
+    @Option(help: "Destination note UUID or unique prefix for mv") var to: String?
     @Option(help: "Notes view size: 0 (default), 1 or 2") var size: Int?
 
     func validate() throws {
-        let options: [(String, Bool, [Action])] = [
-            ("--attachment", attachment != nil, [.export, .rm, .replace, .mv, .view]),
-            ("--file", file != nil, [.export, .add, .replace]),
-            ("--directory", directory != nil, [.export]),
-            ("--to", to != nil, [.mv]),
-            ("--size", size != nil, [.view]),
-            ("--before/--after", position.before != nil || position.after != nil, [.add, .mv])
-        ]
-        for (name, supplied, actions) in options where supplied && !actions.contains(action) {
-            throw ValidationError("\(name) is not valid for attachments \(action.rawValue)")
+        let options = ["attachment": attachment != nil, "file": file != nil, "directory": directory != nil,
+                       "to": to != nil, "size": size != nil, "before": position.before != nil, "after": position.after != nil]
+        for (name, supplied) in options where supplied && Self.optionsForActions[name]?.contains(action) != true {
+            throw ValidationError("--\(name) is not valid for attachments \(action.rawValue)")
         }
         _ = try position.values()
         if let size, !(0...2).contains(size) { throw ValidationError("--size must be 0, 1 or 2") }
@@ -151,17 +154,26 @@ struct Attachments: ParsableCommand {
 
     func run() throws {
         try validate()
+        let supplied = ["attachment": attachment != nil, "file": file != nil, "to": to != nil, "size": size != nil]
+        for name in Self.requiredOptionsForActions[action] ?? [] where supplied[name] != true { throw ValidationError("--\(name) is required") }
+        if action == .export { try validateExportDestination() }
         let store = try note.open(readOnly: action == .ls || action == .export)
-        if action == .ls { return try output.write(["attachments": store.readNote(note.id)["attachments"]!]) }
+        if action == .ls {
+            let data = try store.readNote(note.id)
+            return try output.write(["id": data["id"]!, "attachments": data["attachments"]!])
+        }
         if action == .export {
-            guard let items = try store.readNote(note.id)["attachments"] as? [[String: Any]] else {
+            let data = try store.readNote(note.id)
+            guard let owner = data["id"] as? String, let items = data["attachments"] as? [[String: Any]] else {
                 throw ValidationError("Notes returned invalid attachments")
             }
-            let files = try exportFiles(items)
+            var command = self
+            if let attachment { command.attachment = try store.canonicalID(forReference: attachment, entity: "ICAttachment") }
+            let files = try command.exportFiles(items)
             if file != nil, let saved = files.first {
-                try output.write(["path": saved["path"]!, "id": note.id, "attachment": saved["attachment"]!], text: saved["path"]!)
+                try output.write(["path": saved["path"]!, "id": owner, "attachment": saved["attachment"]!], text: saved["path"]!)
             } else {
-                try output.write(["id": note.id, "files": files], text: files.map { $0["path"]! }.joined(separator: "\n"))
+                try output.write(["id": owner, "files": files], text: files.map { $0["path"]! }.joined(separator: "\n"))
             }
             return
         }
@@ -183,13 +195,17 @@ struct Attachments: ParsableCommand {
             options["size"] = size
         }
         let operation = action == .rm ? "remove" : action == .mv ? "move" : action.rawValue
-        try output.writeAction("attachments " + action.rawValue, store.editNote(note.id, operation: "attachment-" + operation, options: options), text: note.id)
+        try output.writeAction("attachments " + action.rawValue, store.editNote(note.id, operation: "attachment-" + operation, options: options))
     }
 
-    func exportFiles(_ items: [[String: Any]]) throws -> [[String: String]] {
+    func validateExportDestination() throws {
         guard (file != nil) != (directory != nil), file == nil || attachment != nil else {
             throw ValidationError("export requires --directory or both --attachment and --file")
         }
+    }
+
+    func exportFiles(_ items: [[String: Any]]) throws -> [[String: String]] {
+        try validateExportDestination()
         let selected = items.filter { attachment == nil ? $0["type"] as? String != "com.apple.notes.table" : $0["id"] as? String == attachment }
         guard attachment == nil || selected.count == 1 else { throw ValidationError("attachment not found in this note") }
         var copies: [(URL, URL, String)] = []
@@ -231,7 +247,9 @@ struct Attachments: ParsableCommand {
 
 struct Links: ParsableCommand {
     @OptionGroup var output: OutputOptions
-    enum Action: String, ExpressibleByArgument { case ls, add, rm }
+    enum Action: String, CaseIterable, ExpressibleByArgument { case ls, add, rm }
+    static let optionsForActions: [String: Set<Action>] = ["to": [.add], "link": [.rm], "before": [.add], "after": [.add]]
+    static let requiredOptionsForActions: [Action: Set<String>] = [.add: ["to"], .rm: ["link"]]
     static let configuration = CommandConfiguration(abstract: "Create, list and remove native cross-references between notes", discussion: """
         Links are one-way. Get link ids with ls.
         rm removes the link, not the target note.
@@ -244,14 +262,13 @@ struct Links: ParsableCommand {
     @Argument(help: "ls, add or rm") var action: Action
     @OptionGroup var note: LocalNoteOptions
     @OptionGroup var position: PositionOptions
-    @Option(help: "Target note id for add") var to: String?
-    @Option(help: "Link id from links ls, required for rm") var link: String?
+    @Option(help: "Target note UUID or unique prefix for add") var to: String?
+    @Option(help: "Link UUID or unique prefix from links ls, required for rm") var link: String?
 
     func validate() throws {
-        guard to == nil || action == .add else { throw ValidationError("--to is only valid for links add") }
-        guard link == nil || action == .rm else { throw ValidationError("--link is only valid for links rm") }
-        guard (position.before == nil && position.after == nil) || action == .add else {
-            throw ValidationError("--before/--after is only valid for links add")
+        let options = ["to": to != nil, "link": link != nil, "before": position.before != nil, "after": position.after != nil]
+        for (name, supplied) in options where supplied && Self.optionsForActions[name]?.contains(action) != true {
+            throw ValidationError("--\(name) is not valid for links \(action.rawValue)")
         }
         _ = try position.values()
     }
@@ -268,8 +285,11 @@ struct Links: ParsableCommand {
             options["link"] = link
         }
         let store = try note.open(readOnly: action == .ls)
-        if action == .ls { return try output.write(["links": store.readNote(note.id)["links"]!]) }
-        try output.writeAction("links " + action.rawValue, store.editNote(note.id, operation: action == .add ? "link-add" : "link-remove", options: options), text: note.id)
+        if action == .ls {
+            let data = try store.readNote(note.id)
+            return try output.write(["id": data["id"]!, "links": data["links"]!])
+        }
+        try output.writeAction("links " + action.rawValue, store.editNote(note.id, operation: action == .add ? "link-add" : "link-remove", options: options))
     }
 }
 
@@ -277,9 +297,10 @@ struct Search: ParsableCommand {
     @OptionGroup var output: OutputOptions
     enum Field: String, ExpressibleByArgument { case all, id, title, text, attachment, tag, link, document }
     static let configuration = CommandConfiguration(abstract: "Find notes by text, title, id, table cells, tags, links or attachment filename", discussion: """
-        Prints only note URLs, one per line. No matches produce no stdout.
+        Prints only note UUIDs, one per line. No matches produce no stdout.
         Fuzzy matching is enabled by default. Exact matches rank first.
         all searches document contents automatically, including PDF text and image text.
+        Changed documents are indexed in parallel. Later searches reuse the local index.
         Add --json for titles, excerpts and match details. Locked and deleted notes are excluded.
 
         EXAMPLES
@@ -289,7 +310,7 @@ struct Search: ParsableCommand {
         """)
     @Argument(help: "Nonempty text or id fragment to find") var query: String
     @Option(help: "all, id, title, text, attachment, tag, link or document") var field: Field = .all
-    @Option(help: "Exact folder name or local folder id") var folder: String?
+    @Option(help: "Exact folder name or folder UUID or unique prefix") var folder: String?
     @Option(help: "Maximum number of results") var limit = 50
     @Option(help: "Skip this many results") var offset = 0
 

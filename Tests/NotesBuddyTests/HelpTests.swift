@@ -2,6 +2,13 @@ import Foundation
 import XCTest
 
 final class HelpTests: XCTestCase {
+    func testMCPHelpDoesNotPrintAnEmptyOptionsSection() throws {
+        let (code, text) = try output(["mcp", "help"])
+        XCTAssertEqual(code, 0, text)
+        XCTAssertTrue(text.contains("HELP: nb mcp help"))
+        XCTAssertFalse(text.contains("OPTIONS:"))
+    }
+
     func testExecutableIsNamedNB() throws {
         XCTAssertTrue(FileManager.default.isExecutableFile(atPath: ".build/debug/nb"))
         let process = Process()

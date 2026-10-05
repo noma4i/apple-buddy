@@ -36,23 +36,54 @@ nb help
 nb search "invoice"
 ```
 
-Search prints 1 note URL per line. For example:
+Search prints 1 note UUID per line. For example:
 
 ```text
-x-coredata://E34EE572-B6FF-45E3-9FCC-766950115D39/ICNote/p1
+4B34F396-8895-4AC0-B593-28A8C5DD3521
 ```
 
-Copy a URL from your own results into the next command, inside quotes:
+Copy an ID from your results, or use its unique prefix of at least 8 characters:
 
 ```sh
-nb show 'x-coredata://E34EE572-B6FF-45E3-9FCC-766950115D39/ICNote/p1'
+nb show 4B34F396
+nb show 4B34F396 --json
+nb open 4B34F396
 ```
 
-The URL above is fictional. Your URL will differ and works only on your Mac.
-Add `--json` for structured data, or use `inspect` to read formatting, tags and files.
+This example ID is fictional. Your ID will differ.
+IDs do not contain local database addresses or row numbers. System folder UUIDs derive from their account and system name.
+Ambiguous prefixes fail. Add more characters instead of guessing.
+`show` includes tables, tags, links and attachment access. JSON also includes formatting and native object details.
+`show --html` prints only HTML. `show --html --json` includes HTML and the same object metadata.
+`open` shows the selected note in Apple Notes and leaves the app running. JSON readers also return its `applenotes://` URL.
+
+## Connect an AI agent
+
+Start the built-in MCP server with `nb mcp`. Add this entry to your agent's MCP config:
+
+```json
+{
+  "mcpServers": {
+    "notes-buddy": {
+      "command": "/absolute/path/to/nb",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+Use `command -v nb` to find the executable path. The agent starts and stops the server.
+Tools cover the CLI commands, including search, folders, pin, attachments, backup and restore.
+Each tool describes its parameters. Names use underscores, for example `attachments_export` and `table_set`.
+Call `help` with a tool name for full command help. Results contain structured JSON and the same data as the CLI.
+Set `html` or `csv` to `-` and pass text in `stdin` to avoid creating input files.
+Requests run one at a time. Writes use automatic synchronization. Only `open` displays Notes.
+Stdio needs no port, token, Node.js or separate server executable.
+
+## Try editing
 
 To try editing, create a disposable note in a new folder.
-The variable `note` saves the URL returned by `new`. `"$note"` reads that saved URL in later commands.
+The variable `note` saves the UUID returned by `new`. `"$note"` reads that saved ID in later commands.
 
 ```sh
 nb mkfolder "CLI Demo"
@@ -78,6 +109,7 @@ nb attachments export help
 | Task | Commands |
 | --- | --- |
 | Read notes | `ls`, `show`, `inspect` |
+| Open in Notes | `open` |
 | Find notes | `search` |
 | Create, move, delete | `new`, `mv`, `rm` |
 | Pin or unpin | `pin`, `unpin` |
@@ -94,6 +126,7 @@ nb attachments export help
 | Copy database records | `snapshot-db` |
 | Back up local data | `backup`, `restore` |
 | Sync or check status | `sync`, `sync --status` |
+| Connect agents | `mcp` |
 
 Folder selectors accept a name or ID. Use IDs for ambiguous names.
 Actions reject options that they do not use. For example, `attachments ls` does not accept `--file`.
@@ -112,7 +145,7 @@ nb stats --folder Work --json
 nb folders --json
 ```
 
-Folder data includes its URL, path, active notes, deleted notes, direct subfolders and `empty`.
+Folder data includes its UUID, path, active notes, deleted notes, direct subfolders and `empty`.
 `stats --folder` includes descendants. Its totals sum those folders without counting a note twice.
 A folder is empty only when it has no notes, deleted notes or subfolders.
 
@@ -132,7 +165,12 @@ nb ls --tag invoices
 
 `--field` accepts `all` (default), `id`, `title`, `text`, `tag`, `link`, `attachment` or `document`.
 Text search includes table cells. Attachment search finds filenames. Document search reads PDFs and images locally.
+Up to 4 files are indexed in parallel. Later searches reuse extracted text until a file changes.
+The private index lives in `~/Library/Caches/notes-buddy/documents-v1`. Search never launches Notes or changes its database.
+JSON includes `scannedDocuments`, `cachedDocuments` and document errors. Images of 2 pixels or less have no searchable text.
 Missing files and extraction errors are reported. OCR does not modify Notes.
+Malformed PDFs can produce a macOS decoding warning during first indexing.
+JSON search and lists include attachment metadata. `folder` always contains a folder UUID, while `folderPath` contains its readable path.
 
 ## Files, tags and links
 
@@ -149,8 +187,12 @@ Missing iCloud files are not downloaded. Add `--attachment` to directory export 
 
 Tags are native objects. Slashes, commas and whitespace split names into separate tags, not nested tags.
 Links are one-way. Add a reverse link for a bidirectional relationship.
-Use `links add` with your source note URL and `--to` followed by the target note URL.
-For exporting 1 file, get its attachment URL from `attachments ls`, then read `attachments export help`.
+Use `links add` with your source note ID and `--to` followed by the target note ID.
+For exporting 1 file, get its UUID from `show --json` or `attachments ls`, then read `attachments export help`.
+Attachment metadata includes `id`, owning `note`, `type`, `name`, `available` and `exportable`.
+Locally stored files also include `path` and a `file://` URL. Native tables have no exportable file and appear in `tables`.
+Web links appear in `urls`, with their label and address. Links between notes appear in `links`.
+A link to a PDF website is not a file attachment. Export does not download web links.
 
 Use `edit`, `insert`, `format` and native table commands to preserve attachments and links.
 Text edits use literal matches. Missing or ambiguous selections fail. Table indices start at 1.
@@ -176,9 +218,9 @@ Every command accepts `--json` for data. Help and errors always remain text.
 
 | Default stdout | Commands |
 | --- | --- |
-| Note URLs, 1 per line | `search`, `ls`, note writes, import |
-| Folder URLs, paths and counts | `folders`, `stats` |
-| Affected folder URL | Folder writes |
+| Note UUIDs, 1 per line | `search`, `ls`, note writes, import |
+| Folder UUIDs, paths and counts | `folders`, `stats` |
+| Affected folder UUID | Folder writes |
 | Saved paths | Attachment export, snapshots |
 | Requested text or fields | Readers and status commands |
 
@@ -191,7 +233,7 @@ Progress and errors use stderr. JSON import returns `notes` and `summary`.
 Before writes, the CLI closes Notes normally. Do not open Notes or run another writer during a write.
 If database access is denied, check the calling application's Full Disk Access.
 Saved writes wait up to 120 seconds for iCloud acknowledgement, then recheck the queue after Notes exits.
-There is no sync bypass flag. Read commands and `sync --status` do not launch or close Notes.
+There is no sync bypass flag. Readers and `sync --status` do not launch or close Notes. `open` explicitly launches Notes.
 Acknowledgement is not proof that another device has displayed the change.
 
 Snapshots include database records and committed WAL data, but not attachment files.

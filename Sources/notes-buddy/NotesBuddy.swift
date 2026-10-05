@@ -49,10 +49,11 @@ struct NotesBuddy: ParsableCommand {
         guard let usage = formatted.range(of: "(?m)^USAGE: \(name)(?: [a-z][a-z-]*)*", options: .regularExpression) else { return formatted }
         let command = formatted[usage].dropFirst("USAGE: ".count)
         return formatted.replacingOccurrences(of: "(?m)^  -h, --help[^\\n]*", with: "\nHELP: \(command) help", options: .regularExpression)
+            .replacingOccurrences(of: "(?m)^OPTIONS:\\n\\n(?=HELP:)", with: "", options: .regularExpression)
     }
     static let configuration = CommandConfiguration(
         commandName: "nb",
         abstract: "Create, edit and organize Apple Notes from the terminal",
-        subcommands: [Folders.self, MakeFolder.self, RemoveFolder.self, List.self, Stats.self, Show.self, Search.self, New.self, Remove.self, Move.self, Pin.self, Unpin.self, Append.self, Replace.self, Attach.self, Tables.self, SnapshotDatabase.self, Backup.self, Restore.self, Inspect.self, Edit.self, Insert.self, Format.self, Tags.self, Links.self, Attachments.self, ImportBear.self, Sync.self]
+        subcommands: [Folders.self, MakeFolder.self, RemoveFolder.self, List.self, Stats.self, Show.self, OpenNote.self, Search.self, New.self, Remove.self, Move.self, Pin.self, Unpin.self, Append.self, Replace.self, Attach.self, Tables.self, SnapshotDatabase.self, Backup.self, Restore.self, Inspect.self, Edit.self, Insert.self, Format.self, Tags.self, Links.self, Attachments.self, ImportBear.self, Sync.self, MCPCommand.self]
     )
 }

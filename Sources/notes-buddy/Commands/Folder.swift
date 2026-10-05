@@ -15,13 +15,13 @@ struct MakeFolder: ParsableCommand {
     )
 
     @Argument(help: "Name of the new folder") var name: String
-    @Option(help: "Parent folder name or id") var parent: String?
+    @Option(help: "Parent folder name, UUID or unique prefix") var parent: String?
 
     func run() throws {
         let id = try openLocalNotes(readOnly: false).createFolder(name, parent: parent)
         guard var data = try openLocalNotes(readOnly: true).listFolders().first(where: { $0["id"] as? String == id }) else { throw NotesError(description: "Created folder cannot be read") }
         data["created"] = true
-        try output.writeAction("mkfolder", data, text: id)
+        try output.writeAction("mkfolder", data)
     }
 }
 
@@ -38,11 +38,12 @@ struct RemoveFolder: ParsableCommand {
         """
     )
 
-    @Argument(help: "Name or id of the folder to delete") var name: String
+    @Argument(help: "Name, UUID or unique prefix of the folder to delete") var name: String
 
     func run() throws {
         let folder = try resolveFolder(named: name)
+        guard let id = try openLocalNotes(readOnly: true).publicIdentifiers(forIDs: [folder.id])[folder.id] else { throw NotesError(description: "Folder has no UUID") }
         try openLocalNotes(readOnly: false).removeFolder(folder.id)
-        try output.writeAction("rmfolder", ["id": folder.id, "path": folder.path, "noteCount": folder.noteCount, "subfolderCount": folder.subfolderCount, "deleted": true], text: folder.id)
+        try output.writeAction("rmfolder", ["id": id, "path": folder.path, "noteCount": folder.noteCount, "subfolderCount": folder.subfolderCount, "deleted": true])
     }
 }
