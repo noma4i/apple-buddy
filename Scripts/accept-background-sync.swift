@@ -56,6 +56,20 @@ do {
     guard expectedExit && sawNotes && !activatedNotes && !foregroundWorker && visibleWindows == 0 && count == 0 else {
         throw NSError(domain: "accept-sync", code: 3, userInfo: [NSLocalizedDescriptionKey: "Background-only sync acceptance failed"])
     }
+    if !interrupted {
+        let check = Process()
+        check.executableURL = process.executableURL
+        check.arguments = ["sync", "--status", "--json"]
+        let statusOutput = Pipe()
+        check.standardOutput = statusOutput
+        try check.run()
+        check.waitUntilExit()
+        let state = try JSONSerialization.jsonObject(with: statusOutput.fileHandleForReading.readDataToEndOfFile()) as? [String: Any]
+        print("Pending objects after Notes exit: \(state?["pendingObjects"] ?? "missing")")
+        guard check.terminationStatus == 0 && state?["pendingObjects"] as? Int == 0 else {
+            throw NSError(domain: "accept-sync", code: 7, userInfo: [NSLocalizedDescriptionKey: "Notes shutdown queued additional cloud writes"])
+        }
+    }
 } catch {
     FileHandle.standardError.write(Data("FAIL: \(error.localizedDescription)\n".utf8))
     exit(1)

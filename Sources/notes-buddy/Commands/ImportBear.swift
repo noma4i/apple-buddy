@@ -21,7 +21,7 @@ struct BearNote {
     }
 
     var notesIdentifier: String {
-        let bytes = Array(SHA256.hash(data: Data("notes-buddy:bear:\(identifier)".utf8)).prefix(16))
+        let bytes = Array(SHA256.hash(data: Data("nb:bear:\(identifier)".utf8)).prefix(16))
         return UUID(uuid: (bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7], bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15])).uuidString
     }
 }
@@ -146,24 +146,15 @@ func verifyBearNote(_ note: BearNote, state: [AnyHashable: Any], digests: [Strin
 }
 
 struct ImportBear: ParsableCommand {
+    @OptionGroup var output: OutputOptions
     static let configuration = CommandConfiguration(commandName: "import-bear", abstract: "Import this user's Bear notes, folders, native tags and attachments", discussion: """
-        Reads Bear's local SQLite database read-only. Imports active notes, including archived notes.
-        Requires pandoc for Markdown tables and formatting. --dry-run validates files without changing Notes.
-        Each note, its tags and files are committed together through the installed Notes APIs.
-        Stable source identifiers make reruns skip existing imports without overwriting them.
-        --repair-folders moves existing imports to their expected Bear tag paths, without editing their contents.
-        Deleted imports cause an error rather than being recreated. Bear data is never modified.
-        The deepest tag determines the nested destination folder. Equal depth uses alphabetical order.
-        Untagged notes go to Untagged. All tag names are split into individual native tags.
-        Writes automatically quit Notes normally. Do not open Notes until the command finishes.
-        --limit imports a prefix for a trial. The default imports every active note.
-        JSON lines report each note and a final summary. Preserve output for the source-to-Notes mapping.
+        Imports notes, files and tags into folders matching Bear tag paths. Requires pandoc.
+        Reruns skip existing imports. Bear data is never modified.
+        Try --dry-run first. Progress uses stderr. Saved note URLs use stdout.
 
         EXAMPLES
-          notes-buddy import-bear --dry-run
-          notes-buddy import-bear --limit 3
-          notes-buddy import-bear
-          notes-buddy import-bear --repair-folders
+          nb import-bear --dry-run
+          nb import-bear
         """)
     @Option(help: "Bear Application Data directory, defaults to this user's local Bear store") var source: String?
     @Option(help: "pandoc executable") var pandoc = "/opt/homebrew/bin/pandoc"
@@ -183,7 +174,7 @@ struct ImportBear: ParsableCommand {
             }
         }
         let inventory: [String: Any] = ["sourceNotes": all.count, "selectedNotes": notes.count, "files": notes.reduce(0) { $0 + $1.files.count }, "destinations": Set(notes.map(\.destination)).sorted()]
-        if dryRun { try printDictionary(inventory); return }
+        if dryRun { try output.write(inventory); return }
         guard FileManager.default.isExecutableFile(atPath: pandoc) else { throw ValidationError("pandoc executable not found: \(pandoc)") }
         let digests = try Dictionary(uniqueKeysWithValues: Set(notes.flatMap(\.files)).map { ($0, try fileDigest($0)) })
         let scratch = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -211,6 +202,7 @@ struct ImportBear: ParsableCommand {
             destinations[path] = parent
             return parent
         }
+        var records: [[String: Any]] = []
         var imported = 0
         var skipped = 0
         var moved = 0
@@ -242,8 +234,8 @@ struct ImportBear: ParsableCommand {
                 identifiers[note.identifier] = result["id"] as? String
                 if result["imported"] as? Bool == true { imported += 1 } else { skipped += 1 }
                 let record: [String: Any] = ["bear": note.identifier, "notes": result["id"]!, "title": note.title, "folder": note.destination, "files": note.files.count, "imported": result["imported"]!]
-                print(String(decoding: try JSONSerialization.data(withJSONObject: record, options: [.sortedKeys]), as: UTF8.self))
-                fflush(stdout)
+                records.append(record)
+                FileHandle.standardError.write(Data("Bear \(note.identifier) -> \(result["id"]!)\n".utf8))
             }
         }
         var linked = 0
@@ -263,10 +255,13 @@ struct ImportBear: ParsableCommand {
         try store.queueUnsyncedObjects(Array(identifiers.values) + Array(destinations.values))
         let reopened = try openLocalNotes(readOnly: true)
         var verifiedFiles = 0
+        var verifiedIDs: [String] = []
         for note in notes {
             guard let id = identifiers[note.identifier] else { throw NotesError(description: "Missing imported note id") }
             verifiedFiles += try verifyBearNote(note, state: reopened.readNote(id), digests: digests)
+            verifiedIDs.append(id)
         }
-        try printDictionary(["imported": imported, "skipped": skipped, "moved": moved, "total": notes.count, "files": inventory["files"]!, "verifiedFiles": verifiedFiles, "verifiedNotes": identifiers.count, "linked": linked, "deferredLinks": deferredLinks])
+        FileHandle.standardError.write(Data("Imported: \(imported), skipped: \(skipped), moved: \(moved), linked: \(linked)\n".utf8))
+        try output.write(["notes": records, "summary": ["imported": imported, "skipped": skipped, "moved": moved, "total": notes.count, "files": inventory["files"]!, "verifiedFiles": verifiedFiles, "verifiedNotes": identifiers.count, "linked": linked, "deferredLinks": deferredLinks]], text: verifiedIDs.joined(separator: "\n"))
     }
 }

@@ -5,7 +5,7 @@
 NS_ASSUME_NONNULL_BEGIN
 
 FOUNDATION_EXPORT NSString * _Nullable NBReadDocumentText(NSURL *url, NSError **error);
-FOUNDATION_EXPORT NSUInteger NBCommittedLiveWrites(void);
+FOUNDATION_EXPORT NSUInteger NBCommittedCommandWrites(void);
 FOUNDATION_EXPORT NSWorkspaceOpenConfiguration * _Nullable NBNotesBackgroundConfiguration(NSError **error);
 FOUNDATION_EXPORT BOOL NBStartNotesSyncSignals(NSError **error);
 FOUNDATION_EXPORT void NBStopNotesSyncSignals(void);
@@ -14,9 +14,11 @@ FOUNDATION_EXPORT NSInteger NBNotesSyncInterruption(void);
 @interface NBNotes : NSObject
 + (nullable NSManagedObjectModel *)installedModel;
 - (nullable NSDictionary *)cloudStatus:(NSError **)error;
+- (BOOL)pruneEmptyActivityEvents:(NSError **)error;
 - (BOOL)queueUnsyncedObjects:(NSArray<NSString *> *)identifiers error:(NSError **)error;
 - (nullable instancetype)initWithURL:(NSURL *)url readOnly:(BOOL)readOnly error:(NSError **)error;
 - (nullable NSDictionary *)readNote:(NSString *)identifier error:(NSError **)error;
+- (nullable NSArray<NSString *> *)backupAttachmentPaths:(NSError **)error;
 - (nullable NSArray<NSString *> *)noteIDsWithTag:(NSString *)tag error:(NSError **)error;
 - (nullable NSDictionary *)searchNotes:(NSString *)query options:(NSDictionary *)options error:(NSError **)error;
 - (nullable NSDictionary *)editNote:(NSString *)identifier operation:(NSString *)operation options:(NSDictionary *)options error:(NSError **)error;

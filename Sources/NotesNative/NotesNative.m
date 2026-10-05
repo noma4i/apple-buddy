@@ -12,7 +12,7 @@ static NSUInteger NBWriteCount;
 static const int NBSyncSignals[] = {SIGINT, SIGTERM, SIGHUP};
 static struct sigaction NBPreviousSyncSignals[3];
 static volatile sig_atomic_t NBSyncInterruption;
-NSUInteger NBCommittedLiveWrites(void) { return NBWriteCount; }
+NSUInteger NBCommittedCommandWrites(void) { return NBWriteCount; }
 
 static NSString *NBSearchText(NSString *text) {
     NSString *spaces = [text stringByReplacingOccurrencesOfString:@"\\s+" withString:@" " options:NSRegularExpressionSearch range:NSMakeRange(0, text.length)];
@@ -182,6 +182,12 @@ NSString *NBReadDocumentText(NSURL *url, NSError **error) {
 - (NSManagedObject *)parentFolder;
 - (NSManagedObject *)trashFolder;
 - (void)createTrashFolder;
+- (BOOL)isPinnable;
+- (BOOL)isImage;
+- (BOOL)isDrawing;
+- (BOOL)isAudio;
+- (BOOL)isScannedDocument;
+- (void)changePinStatusIfPossible;
 - (id)initWithAttributedString:(NSAttributedString *)text replicaID:(NSUUID *)replica;
 - (id)document;
 - (void)replaceWithDocument:(id)document;
@@ -306,15 +312,42 @@ static void NBRequire(BOOL valid, NSString *message) {
 }
 
 - (BOOL)commitChanges:(NSError **)error {
+    if (![self saveChanges:error]) return NO;
+    if (_liveStore) NBWriteCount++;
+    return YES;
+}
+
+- (BOOL)saveChanges:(NSError **)error {
     [self requireWritable];
     NSMutableSet *changed = [_context.insertedObjects mutableCopy];
     [changed unionSet:_context.updatedObjects];
     for (NSManagedObject *object in changed) {
         if ([object isKindOfClass:NSClassFromString(@"ICCloudSyncingObject")] && !object.isDeleted) [object updateChangeCountWithReason:@"notes-buddy"];
     }
-    if ([_context save:error]) { if (_liveStore) NBWriteCount++; [_context reset]; return YES; }
+    if ([_context save:error]) { [_context reset]; return YES; }
     [_context rollback];
     return NO;
+}
+
+- (BOOL)pruneEmptyActivityEvents:(NSError **)error {
+    @try {
+        [self requireWritable];
+        NSFetchRequest *request = [NSFetchRequest fetchRequestWithEntityName:@"ICCloudSyncingObject"];
+        request.predicate = [NSPredicate predicateWithFormat:@"activityEventsData != nil"];
+        NSArray *objects = [_context executeFetchRequest:request error:error];
+        if (!objects) return NO;
+        for (NSManagedObject *object in objects) {
+            if ([[object valueForKey:@"isSharedViaICloud"] boolValue] || [[object valueForKey:@"markedForDeletion"] boolValue]) continue;
+            if ([object isKindOfClass:NSClassFromString(@"ICNote")] && ([[object valueForKey:@"isPasswordProtected"] boolValue] || [[object valueForKey:@"isDeletedOrInTrash"] boolValue])) continue;
+            NSObject *document = [object valueForKey:@"activityEventsDocument"];
+            if ([[document valueForKey:@"futureVersionCount"] unsignedIntegerValue] != 0) continue;
+            NSObject *events = [document valueForKey:@"orderedSet"];
+            NBRequire(events != nil, @"Cannot decode Notes activity events, metadata remains unchanged");
+            if ([[events valueForKey:@"count"] unsignedIntegerValue] != 0) continue;
+            [object setValue:nil forKey:@"activityEventsData"];
+        }
+        return !_context.hasChanges || [self saveChanges:error];
+    } @catch (NSException *exception) { [_context rollback]; if (error) *error = NBError(exception.reason); return NO; }
 }
 
 - (NSDictionary *)cloudStatus:(NSError **)error {
@@ -386,9 +419,42 @@ static void NBRequire(BOOL valid, NSString *message) {
 
 - (NSArray<NSDictionary *> *)listFolders:(NSError **)error {
     @try {
+        NSArray *folders = [NSClassFromString(@"ICFolder") visibleFoldersInContext:_context];
+        NSFetchRequest *request = [NSFetchRequest fetchRequestWithEntityName:@"ICNote"];
+        request.predicate = [NSPredicate predicateWithFormat:@"markedForDeletion == NO"];
+        NSArray *notes = [_context executeFetchRequest:request error:error];
+        if (!notes) return nil;
+        NSMutableDictionary *counts = [NSMutableDictionary dictionary];
+        NSMutableDictionary *deletedCounts = [NSMutableDictionary dictionary];
+        NSMutableDictionary *children = [NSMutableDictionary dictionary];
+        for (NSManagedObject *note in notes) {
+            NSManagedObject *folder = [note valueForKey:@"folder"];
+            if (!folder) continue;
+            NSString *key = folder.objectID.URIRepresentation.absoluteString;
+            NSMutableDictionary *values = [[note valueForKey:@"isDeletedOrInTrash"] boolValue] ? deletedCounts : counts;
+            values[key] = @([values[key] unsignedIntegerValue] + 1);
+        }
+        for (NSManagedObject *folder in folders) {
+            NSManagedObject *parent = [folder parentFolder];
+            if (parent) {
+                NSString *key = parent.objectID.URIRepresentation.absoluteString;
+                children[key] = @([children[key] unsignedIntegerValue] + 1);
+            }
+        }
         NSMutableArray *result = [NSMutableArray array];
-        for (NSManagedObject *folder in [NSClassFromString(@"ICFolder") visibleFoldersInContext:_context]) {
-            NSMutableDictionary *value = [@{@"id":folder.objectID.URIRepresentation.absoluteString, @"name":[folder valueForKey:@"title"] ?: @""} mutableCopy];
+        for (NSManagedObject *folder in folders) {
+            NSString *key = folder.objectID.URIRepresentation.absoluteString;
+            NSUInteger noteCount = [counts[key] unsignedIntegerValue];
+            NSUInteger deletedCount = [deletedCounts[key] unsignedIntegerValue];
+            NSUInteger subfolderCount = [children[key] unsignedIntegerValue];
+            NSMutableArray *names = [NSMutableArray array];
+            NSMutableSet *visited = [NSMutableSet set];
+            for (NSManagedObject *current = folder; current; current = [current parentFolder]) {
+                NBRequire(![visited containsObject:current.objectID], @"Folder hierarchy contains a cycle");
+                [visited addObject:current.objectID];
+                [names insertObject:[current valueForKey:@"title"] ?: @"" atIndex:0];
+            }
+            NSMutableDictionary *value = [@{@"id":key, @"name":[folder valueForKey:@"title"] ?: @"", @"path":[names componentsJoinedByString:@"/"], @"noteCount":@(noteCount), @"deletedNoteCount":@(deletedCount), @"subfolderCount":@(subfolderCount), @"empty":@((BOOL)(noteCount + deletedCount + subfolderCount == 0))} mutableCopy];
             NSManagedObject *parent = [folder parentFolder];
             if (parent) value[@"parent"] = parent.objectID.URIRepresentation.absoluteString;
             [result addObject:value];
@@ -407,7 +473,7 @@ static void NBRequire(BOOL valid, NSString *message) {
         NSMutableArray *result = [NSMutableArray array];
         for (NSManagedObject *note in notes) {
             if ([[note valueForKey:@"isDeletedOrInTrash"] boolValue]) continue;
-            [result addObject:@{@"id":note.objectID.URIRepresentation.absoluteString, @"identifier":[note valueForKey:@"identifier"], @"hasDocument":@([[note valueForKey:@"noteData"] valueForKey:@"data"] != nil), @"title":[note valueForKey:@"title"] ?: @"", @"folder":[folder valueForKey:@"title"] ?: @"", @"modified":[note valueForKey:@"modificationDate"] ?: [NSDate distantPast]}];
+            [result addObject:@{@"id":note.objectID.URIRepresentation.absoluteString, @"identifier":[note valueForKey:@"identifier"], @"hasDocument":@((BOOL)([[note valueForKey:@"noteData"] valueForKey:@"data"] != nil)), @"title":[note valueForKey:@"title"] ?: @"", @"folder":[folder valueForKey:@"title"] ?: @"", @"modified":[note valueForKey:@"modificationDate"] ?: [NSDate distantPast]}];
         }
         return result;
     } @catch (NSException *exception) { if (error) *error = NBError(exception.reason); return nil; }
@@ -568,6 +634,37 @@ static void NBRequire(BOOL valid, NSString *message) {
     return ordered;
 }
 
+- (NSArray<NSString *> *)backupAttachmentPaths:(NSError **)error {
+    @try {
+        NSFetchRequest *request = [NSFetchRequest fetchRequestWithEntityName:@"ICNote"];
+        request.predicate = [NSPredicate predicateWithFormat:@"markedForDeletion == NO"];
+        NSArray *notes = [_context executeFetchRequest:request error:error];
+        if (!notes) return nil;
+        NSMutableOrderedSet *paths = [NSMutableOrderedSet orderedSet];
+        for (NSManagedObject *note in notes) {
+            NSMutableSet *attachments = [NSMutableSet set];
+            for (id collection in @[[note visibleTopLevelAttachments], [note visibleInlineAttachments]]) {
+                for (NSManagedObject *attachment in collection) [attachments addObject:attachment];
+            }
+            for (NSManagedObject *attachment in attachments) {
+                NSURL *file = [attachment fileURL];
+                NSString *type = [attachment valueForKey:@"typeUTI"];
+                BOOL storedDrawing = [attachment isDrawing] && [[attachment valueForKey:@"mergeableData"] length] > 0;
+                BOOL needsFile = !storedDrawing && ([attachment isImage] || [attachment isDrawing] || [attachment isAudio] || [attachment isScannedDocument] || [type isEqualToString:@"com.adobe.pdf"] || [type hasPrefix:@"public."]);
+                NBRequire(!needsFile || file != nil, [NSString stringWithFormat:@"Attachment %@ (%@) has no local file, no complete backup created", attachment.objectID.URIRepresentation.absoluteString, type]);
+                if (file) {
+                    NBRequire([file checkResourceIsReachableAndReturnError:nil], @"A note attachment is unavailable locally, a complete backup is unavailable");
+                    [paths addObject:file.path];
+                }
+            }
+        }
+        return paths.array;
+    } @catch (NSException *exception) {
+        if (error) *error = NBError(exception.reason);
+        return nil;
+    }
+}
+
 - (NSDictionary *)describeNote:(NSManagedObject *)note {
     NSMutableArray *folderNames = [NSMutableArray array];
     NSMutableSet *visitedFolders = [NSMutableSet set];
@@ -634,7 +731,7 @@ static void NBRequire(BOOL valid, NSString *message) {
         NSUInteger hints = [attributes[@"TTHints"] unsignedIntegerValue];
         NSMutableDictionary *run = [@{
             @"text":[text.string substringWithRange:range], @"location":@(range.location), @"length":@(range.length),
-            @"bold":@((hints & 1) != 0), @"italic":@((hints & 2) != 0)
+            @"bold":@((BOOL)((hints & 1) != 0)), @"italic":@((BOOL)((hints & 2) != 0))
         } mutableCopy];
         id style = attributes[@"TTStyle"];
         if (style) {
@@ -646,12 +743,14 @@ static void NBRequire(BOOL valid, NSString *message) {
     }];
     return @{
         @"id":note.objectID.URIRepresentation.absoluteString,
+        @"title":[note valueForKey:@"title"] ?: @"",
         @"folder":noteFolder.objectID.URIRepresentation.absoluteString ?: @"",
         @"folderPath":[folderNames componentsJoinedByString:@"/"],
+        @"pinned":@([[note valueForKey:@"isPinned"] boolValue]),
         @"needsCloudPush":[note valueForKey:@"needsToBePushedToCloud"],
         @"inCloud":[note valueForKey:@"isInCloud"],
         @"cloudAcknowledged":@((BOOL)([[note valueForKey:@"isInCloud"] boolValue] && [[note valueForKey:@"hasSuccessfullyPushedLatestVersionToCloud"] boolValue])),
-        @"canRewriteHTML":@(!hasNonTableAttachment && ![note visibleInlineAttachments].count && ![[note valueForKey:@"hasChecklist"] boolValue] && ![[note valueForKey:@"isSharedViaICloud"] boolValue] && ![[note valueForKey:@"isDeletedOrInTrash"] boolValue]),
+        @"canRewriteHTML":@((BOOL)(!hasNonTableAttachment && ![note visibleInlineAttachments].count && ![[note valueForKey:@"hasChecklist"] boolValue] && ![[note valueForKey:@"isSharedViaICloud"] boolValue] && ![[note valueForKey:@"isDeletedOrInTrash"] boolValue])),
         @"text":text.string ?: @"",
         @"attachments":attachments,
         @"tags":tags,
@@ -782,7 +881,7 @@ static void NBRequire(BOOL valid, NSString *message) {
                 [changed addAttribute:@"TTHints" value:@(hints) range:part];
             } else {
                 NSString *key = [styleName isEqualToString:@"underline"] ? @"TTUnderline" : @"TTStrikethrough";
-                [changed addAttribute:key value:@(![options[@"off"] boolValue]) range:part];
+                [changed addAttribute:key value:@((BOOL)![options[@"off"] boolValue]) range:part];
             }
         }];
         [document replaceCharactersInRange:range withAttributedString:changed];
@@ -980,15 +1079,22 @@ static void NBRequire(BOOL valid, NSString *message) {
 
 - (NSDictionary *)changeNote:(NSManagedObject *)note operation:(NSString *)operation options:(NSDictionary *)options error:(NSError **)error {
     @try {
-        NBRequire([@[@"replace", @"insert", @"format", @"table-new", @"table-set", @"table-add-row", @"table-rm-row", @"table-add-col", @"table-rm-col", @"tag-add", @"tag-remove", @"link-add", @"link-replace", @"link-remove", @"attachment-add", @"attachment-remove", @"attachment-replace", @"attachment-move", @"attachment-view"] containsObject:operation], @"Unknown edit operation");
+        NBRequire([@[@"pin", @"unpin", @"replace", @"insert", @"format", @"table-new", @"table-set", @"table-add-row", @"table-rm-row", @"table-add-col", @"table-rm-col", @"tag-add", @"tag-remove", @"link-add", @"link-replace", @"link-remove", @"attachment-add", @"attachment-remove", @"attachment-replace", @"attachment-move", @"attachment-view"] containsObject:operation], @"Unknown edit operation");
         [self requireWritable];
         if ([[note valueForKey:@"isSharedViaICloud"] boolValue]) {
             if (error) *error = NBError(@"Shared notes are not supported for editing");
             return nil;
         }
+        NBRequire(![[note valueForKey:@"isDeletedOrInTrash"] boolValue], @"Cannot edit a deleted note");
+        if ([operation isEqualToString:@"pin"] || [operation isEqualToString:@"unpin"]) {
+            NBRequire([note isPinnable], @"This note cannot be pinned");
+            BOOL pinned = [operation isEqualToString:@"pin"];
+            if ([[note valueForKey:@"isPinned"] boolValue] != pinned) [note changePinStatusIfPossible];
+            NBRequire([[note valueForKey:@"isPinned"] boolValue] == pinned, @"Notes did not change pin status");
+            return [self describeNote:note];
+        }
         id document = [note mergeableString];
         NSAttributedString *original = [[document attributedString] copy];
-        NBRequire(![[note valueForKey:@"isDeletedOrInTrash"] boolValue], @"Cannot edit a deleted note");
         if ([operation isEqualToString:@"replace"]) {
             NSString *replacement = options[@"replacement"];
             NBRequire(replacement && ![replacement containsString:@"\uFFFC"], @"Replacement cannot include attachment markers");

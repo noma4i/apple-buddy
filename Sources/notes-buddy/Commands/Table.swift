@@ -6,6 +6,7 @@ struct TableOption: ParsableArguments {
 }
 
 struct Tables: ParsableCommand {
+    @OptionGroup var output: OutputOptions
     static let configuration = CommandConfiguration(
         commandName: "table",
         abstract: "Create tables and edit their cells, rows and columns",
@@ -14,22 +15,23 @@ struct Tables: ParsableCommand {
         Edits the native table while preserving attachments, links and tags.
 
         EXAMPLES
-          notes-buddy table new <id> --csv data.csv
-          notes-buddy table ls <id>
-          notes-buddy table set <id> --row 2 --col 1 --value "Done"
-          notes-buddy table add-row <id> --at 2
+          nb table new <id> --csv data.csv
+          nb table ls <id>
+          nb table set <id> --row 2 --col 1 --value "Done"
+          nb table add-row <id> --at 2
         """,
         subcommands: [TableList.self, TableNew.self, TableSet.self, TableAddRow.self, TableRemoveRow.self, TableAddColumn.self, TableRemoveColumn.self]
     )
 }
 
-private func editTable(id: String, table: TableOption, operation: String, values: [String: Any] = [:]) throws {
+private func editTable(id: String, table: TableOption, operation: String, output: OutputOptions, values: [String: Any] = [:]) throws {
     var options = values
     options["table"] = table.index
-    _ = try openLocalNotes(readOnly: false).editNote(id, operation: operation, options: options)
+    try output.writeAction(operation.replacingOccurrences(of: "table-", with: "table "), openLocalNotes(readOnly: false).editNote(id, operation: operation, options: options), text: id)
 }
 
 struct TableList: ParsableCommand {
+    @OptionGroup var output: OutputOptions
     static let configuration = CommandConfiguration(
         commandName: "ls",
         abstract: "Print the tables of a note",
@@ -38,25 +40,25 @@ struct TableList: ParsableCommand {
         With --json prints an array of tables, each one an array of rows.
 
         EXAMPLE
-          notes-buddy table ls <id> --json
+          nb table ls <id> --json
         """
     )
 
     @Argument(help: "Note id from `ls` or `new`") var id: String
-    @Flag(help: "Print JSON instead of text") var json = false
 
     func run() throws {
         let result = try openLocalNotes(readOnly: true).readNote(id)
         guard let tables = result["tables"] as? [[[String]]] else { throw NotesError(description: "Notes returned invalid table data") }
-        if json { return try printJSON(tables) }
-        for (number, grid) in tables.enumerated() {
-            print("# table \(number + 1)")
-            grid.forEach { print($0.map { $0.replacingOccurrences(of: "\t", with: " ").replacingOccurrences(of: "\n", with: " ") }.joined(separator: "\t")) }
-        }
+        let text = tables.enumerated().map { number, grid in
+            let rows = grid.map { $0.map { $0.replacingOccurrences(of: "\t", with: " ").replacingOccurrences(of: "\n", with: " ") }.joined(separator: "\t") }
+            return (["# table \(number + 1)"] + rows).joined(separator: "\n")
+        }.joined(separator: "\n")
+        try output.write(tables, text: text)
     }
 }
 
 struct TableNew: ParsableCommand {
+    @OptionGroup var output: OutputOptions
     static let configuration = CommandConfiguration(
         commandName: "new",
         abstract: "Add a table to the end of a note",
@@ -65,8 +67,8 @@ struct TableNew: ParsableCommand {
         grid with --size ROWSxCOLUMNS. Give exactly one of the two.
 
         EXAMPLES
-          notes-buddy table new <id> --csv data.csv
-          notes-buddy table new <id> --size 3x2
+          nb table new <id> --csv data.csv
+          nb table new <id> --size 3x2
         """
     )
 
@@ -87,11 +89,12 @@ struct TableNew: ParsableCommand {
             throw ValidationError("give exactly one of --csv and --size")
         }
         guard !grid.isEmpty else { throw NotesError(description: "the CSV has no rows") }
-        _ = try openLocalNotes(readOnly: false).editNote(id, operation: "table-new", options: ["rows": grid.count, "columns": grid.map(\.count).max() ?? 0, "grid": grid])
+        try output.writeAction("table new", openLocalNotes(readOnly: false).editNote(id, operation: "table-new", options: ["rows": grid.count, "columns": grid.map(\.count).max() ?? 0, "grid": grid]), text: id)
     }
 }
 
 struct TableSet: ParsableCommand {
+    @OptionGroup var output: OutputOptions
     static let configuration = CommandConfiguration(
         commandName: "set",
         abstract: "Change the text of one cell",
@@ -99,7 +102,7 @@ struct TableSet: ParsableCommand {
         Replaces the whole text of the cell. Other cells and the rest of the note stay as they are.
 
         EXAMPLE
-          notes-buddy table set <id> --row 2 --col 1 --value "Done"
+          nb table set <id> --row 2 --col 1 --value "Done"
         """
     )
 
@@ -110,11 +113,12 @@ struct TableSet: ParsableCommand {
     @Option(help: "New cell text, plain text") var value: String
 
     func run() throws {
-        try editTable(id: id, table: table, operation: "table-set", values: ["row": row, "column": col, "value": value])
+        try editTable(id: id, table: table, operation: "table-set", output: output, values: ["row": row, "column": col, "value": value])
     }
 }
 
 struct TableAddRow: ParsableCommand {
+    @OptionGroup var output: OutputOptions
     static let configuration = CommandConfiguration(
         commandName: "add-row",
         abstract: "Insert an empty row",
@@ -122,7 +126,7 @@ struct TableAddRow: ParsableCommand {
         Without --at the row goes to the end. With --at N it becomes row N.
 
         EXAMPLE
-          notes-buddy table add-row <id> --at 2
+          nb table add-row <id> --at 2
         """
     )
 
@@ -131,11 +135,12 @@ struct TableAddRow: ParsableCommand {
     @Option(help: "Position of the new row") var at: Int?
 
     func run() throws {
-        try editTable(id: id, table: table, operation: "table-add-row", values: at.map { ["at": $0] } ?? [:])
+        try editTable(id: id, table: table, operation: "table-add-row", output: output, values: at.map { ["at": $0] } ?? [:])
     }
 }
 
 struct TableRemoveRow: ParsableCommand {
+    @OptionGroup var output: OutputOptions
     static let configuration = CommandConfiguration(
         commandName: "rm-row",
         abstract: "Delete a row",
@@ -143,7 +148,7 @@ struct TableRemoveRow: ParsableCommand {
         Refuses to delete the only row of a table.
 
         EXAMPLE
-          notes-buddy table rm-row <id> --row 3
+          nb table rm-row <id> --row 3
         """
     )
 
@@ -152,11 +157,12 @@ struct TableRemoveRow: ParsableCommand {
     @Option(help: "Row number to delete") var row: Int
 
     func run() throws {
-        try editTable(id: id, table: table, operation: "table-rm-row", values: ["at": row])
+        try editTable(id: id, table: table, operation: "table-rm-row", output: output, values: ["at": row])
     }
 }
 
 struct TableAddColumn: ParsableCommand {
+    @OptionGroup var output: OutputOptions
     static let configuration = CommandConfiguration(
         commandName: "add-col",
         abstract: "Insert an empty column",
@@ -164,7 +170,7 @@ struct TableAddColumn: ParsableCommand {
         Without --at the column goes to the end. With --at N it becomes column N.
 
         EXAMPLE
-          notes-buddy table add-col <id> --at 1
+          nb table add-col <id> --at 1
         """
     )
 
@@ -173,11 +179,12 @@ struct TableAddColumn: ParsableCommand {
     @Option(help: "Position of the new column") var at: Int?
 
     func run() throws {
-        try editTable(id: id, table: table, operation: "table-add-col", values: at.map { ["at": $0] } ?? [:])
+        try editTable(id: id, table: table, operation: "table-add-col", output: output, values: at.map { ["at": $0] } ?? [:])
     }
 }
 
 struct TableRemoveColumn: ParsableCommand {
+    @OptionGroup var output: OutputOptions
     static let configuration = CommandConfiguration(
         commandName: "rm-col",
         abstract: "Delete a column",
@@ -185,7 +192,7 @@ struct TableRemoveColumn: ParsableCommand {
         Refuses to delete the only column of a table.
 
         EXAMPLE
-          notes-buddy table rm-col <id> --col 2
+          nb table rm-col <id> --col 2
         """
     )
 
@@ -194,6 +201,6 @@ struct TableRemoveColumn: ParsableCommand {
     @Option(help: "Column number to delete") var col: Int
 
     func run() throws {
-        try editTable(id: id, table: table, operation: "table-rm-col", values: ["at": col])
+        try editTable(id: id, table: table, operation: "table-rm-col", output: output, values: ["at": col])
     }
 }

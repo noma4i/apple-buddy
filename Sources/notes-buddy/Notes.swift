@@ -8,6 +8,21 @@ struct Folder: Codable {
     let id: String
     let name: String
     let parent: String?
+    let path: String
+    let noteCount: Int
+    let deletedNoteCount: Int
+    let subfolderCount: Int
+    let empty: Bool
+
+    var summary: String {
+        "\(path)\n  \(noteCount) notes, \(deletedNoteCount) deleted notes, \(subfolderCount) subfolders, empty=\(empty)\n  \(id)"
+    }
+}
+
+func noteActionData(id: String, fields: [String: Any] = [:]) throws -> [String: Any] {
+    guard var result = try openLocalNotes(readOnly: true).readNote(id) as? [String: Any] else { throw NotesError(description: "Notes returned invalid note data") }
+    for (key, value) in fields { result[key] = value }
+    return result
 }
 
 struct Note: Codable {
@@ -17,17 +32,13 @@ struct Note: Codable {
     let modified: Date
 }
 
-func printJSON<T: Encodable>(_ value: T) throws {
-    let encoder = JSONEncoder()
-    encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-    encoder.dateEncodingStrategy = .iso8601
-    print(String(decoding: try encoder.encode(value), as: UTF8.self))
-}
-
 func listFolders() throws -> [Folder] {
     try openLocalNotes(readOnly: true).listFolders().map { value in
         guard let id = value["id"] as? String, let name = value["name"] as? String else { throw NotesError(description: "Notes returned invalid folder data") }
-        return Folder(id: id, name: name, parent: value["parent"] as? String)
+        guard let path = value["path"] as? String, let noteCount = value["noteCount"] as? Int,
+              let deletedCount = value["deletedNoteCount"] as? Int, let childCount = value["subfolderCount"] as? Int,
+              let empty = value["empty"] as? Bool else { throw NotesError(description: "Notes returned invalid folder statistics") }
+        return Folder(id: id, name: name, parent: value["parent"] as? String, path: path, noteCount: noteCount, deletedNoteCount: deletedCount, subfolderCount: childCount, empty: empty)
     }
 }
 

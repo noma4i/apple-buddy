@@ -19,6 +19,8 @@ final class SnapshotTests: XCTestCase {
 
         XCTAssertEqual(result.status, 0, result.output)
         guard result.status == 0 else { return }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: destination.path + "-shm"))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: destination.path + "-wal"))
         XCTAssertEqual(try Data(contentsOf: source), before)
         XCTAssertEqual(try Data(contentsOf: wal), walBefore)
         let copy = try openDatabase(destination, flags: SQLITE_OPEN_READONLY)
@@ -98,7 +100,7 @@ final class SnapshotTests: XCTestCase {
     private func runSnapshot(source: URL, destination: URL) throws -> (status: Int32, output: String) {
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
         let process = Process()
-        process.executableURL = root.appendingPathComponent(".build/debug/notes-buddy")
+        process.executableURL = root.appendingPathComponent(".build/debug/nb")
         process.arguments = ["snapshot-db", destination.path, "--database", source.path]
         let pipe = Pipe()
         process.standardOutput = pipe

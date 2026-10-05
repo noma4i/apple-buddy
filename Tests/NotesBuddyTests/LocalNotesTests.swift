@@ -59,6 +59,53 @@ final class LocalNotesTests: XCTestCase {
         if let directory { try FileManager.default.removeItem(at: directory) }
     }
 
+    func testCLISelectorsPrintOnlyURLsAndPreserveJSONDetails() throws {
+        let container = directory.appendingPathComponent("Library/Group Containers/group.com.apple.notes")
+        try FileManager.default.createDirectory(at: container, withIntermediateDirectories: true)
+        func run(_ arguments: [String], isolated: Bool = true) throws -> (String, String) {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: ".build/debug/nb")
+            process.arguments = arguments
+            if isolated {
+                var environment = ProcessInfo.processInfo.environment
+                environment["CFFIXED_USER_HOME"] = directory.path
+                process.environment = environment
+            }
+            let output = Pipe(), errors = Pipe()
+            process.standardOutput = output
+            process.standardError = errors
+            try process.run()
+            let text = String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+            let error = String(decoding: errors.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+            process.waitUntilExit()
+            XCTAssertEqual(process.terminationStatus, 0, error)
+            return (text, error)
+        }
+        _ = try run(["snapshot-db", container.appendingPathComponent("NoteStore.sqlite").path, "--database", database.path], isolated: false)
+        let found = try run(["search", "Fixtur", "--field", "title"])
+        XCTAssertEqual(found.0, noteID + "\n")
+        XCTAssertEqual(found.1, "1 of 1 notes\n")
+        let listed = try run(["ls", "--folder", "Fixture"])
+        XCTAssertEqual(Set(listed.0.split(separator: "\n").map(String.init)), Set([noteID!, targetID!]))
+        XCTAssertEqual(listed.1, "2 notes\n")
+        let empty = try run(["search", "no-match-unique-xyz", "--field", "title"])
+        XCTAssertEqual(empty.0, "")
+        XCTAssertEqual(empty.1, "0 of 0 notes\n")
+        let json = try run(["search", "Fixtur", "--field", "title", "--json"])
+        let value = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(json.0.utf8)) as? [String: Any])
+        XCTAssertEqual((value["notes"] as? [[String: Any]])?.first?["title"] as? String, "Fixture")
+        XCTAssertEqual((value["documentErrors"] as? [Any])?.count, 0)
+        XCTAssertTrue(json.1.isEmpty)
+        let stats = try run(["stats", "--folder", "Fixture", "--json"])
+        let statistics = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(stats.0.utf8)) as? [String: Any])
+        XCTAssertEqual(statistics["noteCount"] as? Int, 2)
+        XCTAssertEqual(statistics["folderCount"] as? Int, 1)
+        XCTAssertTrue(stats.1.isEmpty)
+        let textStats = try run(["stats", "--folder", "Fixture"])
+        XCTAssertTrue(textStats.0.contains("2 notes, 0 deleted notes, 1 folders"))
+        XCTAssertTrue(textStats.0.contains("empty=false"))
+    }
+
     func testNativeFolderAndNoteLifecyclePreservesRichTextAndTables() throws {
         let store = try NBNotes(url: database, readOnly: false)
         let folder = try store.createFolder("Native destination", parent: nil)
@@ -66,6 +113,7 @@ final class LocalNotesTests: XCTestCase {
         XCTAssertThrowsError(try store.createFolder("Native destination", parent: nil))
         let id = try store.createNote(inFolder: folder, html: "<h1>Native title</h1><p>Alpha <b>bold</b></p><table><tr><td>A</td><td>B</td></tr></table>")
         let state = try store.readNote(id)
+        XCTAssertEqual(state["title"] as? String, "Native title")
         XCTAssertTrue((state["text"] as? String)?.contains("Native title") == true)
         XCTAssertTrue((state["runs"] as? [[String: Any]])?.contains { ($0["text"] as? String)?.contains("bold") == true && $0["bold"] as? Bool == true } == true, "\(state["runs"] ?? "missing")")
         XCTAssertEqual(state["tables"] as? [[[String]]], [[["A", "B"]]])
@@ -82,6 +130,34 @@ final class LocalNotesTests: XCTestCase {
         try store.removeFolder(folder)
         let folders = try NBNotes(url: database, readOnly: true).listFolders()
         XCTAssertFalse(folders.contains { ($0["id"] as? String) == folder || ($0["id"] as? String) == child })
+    }
+
+    func testEmptyActivityEventsDoNotCreateShutdownWritesAndPreserveDocument() throws {
+        let store = try NBNotes(url: database, readOnly: false)
+        let context = try XCTUnwrap(store.value(forKey: "context") as? NSManagedObjectContext)
+        let objectID = try XCTUnwrap(context.persistentStoreCoordinator?.managedObjectID(forURIRepresentation: URL(string: noteID)!))
+        let note = try context.existingObject(with: objectID)
+        let original = try XCTUnwrap((note.value(forKey: "noteData") as? NSManagedObject)?.value(forKey: "data") as? Data)
+        let document = try XCTUnwrap(note.value(forKey: "activityEventsDocument") as? NSObject)
+        let orderedSet = try XCTUnwrap(document.value(forKey: "orderedSet") as? NSObject)
+        _ = orderedSet.perform(NSSelectorFromString("addObject:"), with: "Fixture event")
+        _ = orderedSet.perform(NSSelectorFromString("removeAllObjects"))
+        let metadata = try XCTUnwrap(document.perform(NSSelectorFromString("serialize"))?.takeUnretainedValue() as? Data)
+        note.setValue(metadata, forKey: "activityEventsData")
+        try context.save()
+        context.reset()
+        try store.pruneEmptyActivityEvents()
+        let reopened = try context.existingObject(with: objectID)
+        XCTAssertNil(reopened.value(forKey: "activityEventsData"))
+        XCTAssertEqual((reopened.value(forKey: "noteData") as? NSManagedObject)?.value(forKey: "data") as? Data, original)
+        let cloudClass = try XCTUnwrap(NSClassFromString("ICCloudSyncingObject") as? NSObject.Type)
+        for _ in 0..<2 {
+            _ = cloudClass.perform(NSSelectorFromString("removeAllCloudSyncingObjectActivityEventsForUnsharedObjectsInContext:"), with: context)
+            XCTAssertTrue(context.updatedObjects.isEmpty, "Notes shutdown must not write empty activity events again")
+            try context.save()
+            context.reset()
+        }
+        XCTAssertThrowsError(try NBNotes(url: database, readOnly: true).pruneEmptyActivityEvents())
     }
 
     func testMoveAndTrashAdvanceFolderModificationDateWithoutChangingDocument() throws {
@@ -106,6 +182,37 @@ final class LocalNotesTests: XCTestCase {
         let deleted = try state()
         XCTAssertGreaterThanOrEqual(try XCTUnwrap(deleted.0), deleteStarted)
         XCTAssertEqual(deleted.1, original.1)
+    }
+
+    func testActivityPreparationPreservesNonemptyAndProtectedEvents() throws {
+        let store = try NBNotes(url: database, readOnly: false)
+        let context = try XCTUnwrap(store.value(forKey: "context") as? NSManagedObjectContext)
+        let id = try XCTUnwrap(context.persistentStoreCoordinator?.managedObjectID(forURIRepresentation: URL(string: noteID)!))
+        let note = try context.existingObject(with: id)
+        let document = try XCTUnwrap(note.value(forKey: "activityEventsDocument") as? NSObject)
+        let events = try XCTUnwrap(document.value(forKey: "orderedSet") as? NSObject)
+        _ = events.perform(NSSelectorFromString("addObject:"), with: "Fixture event")
+        let compressed = try XCTUnwrap(document.perform(NSSelectorFromString("serialize"))?.takeUnretainedValue() as? Data)
+        note.setValue(compressed, forKey: "activityEventsData")
+        try context.save()
+        context.reset()
+        let decoded = try XCTUnwrap(try context.existingObject(with: id).value(forKey: "activityEventsDocument") as? NSObject)
+        XCTAssertEqual((decoded.value(forKey: "orderedSet") as? NSObject)?.value(forKey: "count") as? Int, 1)
+        try store.pruneEmptyActivityEvents()
+        XCTAssertEqual(try context.existingObject(with: id).value(forKey: "activityEventsData") as? Data, compressed)
+        let reopened = try context.existingObject(with: id)
+        _ = reopened.perform(NSSelectorFromString("removeAllCloudSyncingObjectActivityEvents"))
+        let empty = try XCTUnwrap(reopened.value(forKey: "activityEventsData") as? Data)
+        reopened.setValue(true, forKey: "isPasswordProtected")
+        try context.save()
+        context.reset()
+        try context.existingObject(with: id).setValue(empty, forKey: "activityEventsData")
+        try context.save()
+        context.reset()
+        XCTAssertEqual(try context.existingObject(with: id).value(forKey: "isPasswordProtected") as? Bool, true)
+        XCTAssertEqual(try context.existingObject(with: id).primitiveValue(forKey: "activityEventsData") as? Data, empty)
+        try store.pruneEmptyActivityEvents()
+        XCTAssertEqual(try context.existingObject(with: id).primitiveValue(forKey: "activityEventsData") as? Data, empty)
     }
 
     func testNativeHTMLWriteRejectsAttachmentsAndReadOnlyWrites() throws {
@@ -269,6 +376,108 @@ final class LocalNotesTests: XCTestCase {
         XCTAssertEqual((result["tags"] as? [[String: Any]])?.compactMap { $0["name"] as? String }, ["#retained"])
     }
 
+    func testPinAndUnpinPreserveDocumentAndQueueCloudChanges() throws {
+        let store = try NBNotes(url: database, readOnly: false)
+        _ = try store.editNote(noteID, operation: "tag-add", options: ["name": "pinfixture"])
+        _ = try store.editNote(noteID, operation: "link-add", options: ["target": targetID!])
+        _ = try store.editNote(noteID, operation: "table-new", options: ["rows": 1, "columns": 1, "grid": [["Pinned cell"]]])
+        let before = try store.readNote(noteID)
+        func object(_ reopened: NBNotes) throws -> NSManagedObject {
+            let context = try XCTUnwrap(reopened.value(forKey: "context") as? NSManagedObjectContext)
+            let id = try XCTUnwrap(context.persistentStoreCoordinator?.managedObjectID(forURIRepresentation: URL(string: noteID)!))
+            return try context.existingObject(with: id)
+        }
+        let original = try XCTUnwrap((try object(store).value(forKey: "noteData") as? NSManagedObject)?.value(forKey: "data") as? Data)
+        XCTAssertEqual(before["pinned"] as? Bool, false)
+        var result: [AnyHashable: Any]?
+        XCTAssertNoThrow(result = try store.editNote(noteID, operation: "pin", options: [:]))
+        XCTAssertEqual(result?["pinned"] as? Bool, true)
+        guard result != nil else { return }
+        for operation in ["pin", "unpin", "unpin", "pin"] {
+            let changed = try store.editNote(noteID, operation: operation, options: [:])
+            XCTAssertEqual(changed["pinned"] as? Bool, operation == "pin")
+            let reopened = try NBNotes(url: database, readOnly: true)
+            let after = try reopened.readNote(noteID)
+            for key in ["id", "text", "folder", "runs", "attachments", "links", "tables"] {
+                XCTAssertEqual(after[key] as? NSObject, before[key] as? NSObject, key)
+            }
+            XCTAssertEqual(after["tags"] as? NSObject, before["tags"] as? NSObject)
+            let note = try object(reopened)
+            XCTAssertEqual((note.value(forKey: "noteData") as? NSManagedObject)?.value(forKey: "data") as? Data, original)
+            XCTAssertTrue(note.value(forKey: "needsToBePushedToCloud") as? Bool == true)
+        }
+        let folder = try store.createFolder("Pinned destination", parent: nil)
+        try store.moveNote(noteID, toFolder: folder)
+        XCTAssertEqual(try NBNotes(url: database, readOnly: true).readNote(noteID)["pinned"] as? Bool, true)
+        try store.deleteNote(noteID)
+        XCTAssertThrowsError(try store.editNote(noteID, operation: "pin", options: [:]))
+        XCTAssertThrowsError(try store.editNote(noteID, operation: "unpin", options: [:]))
+    }
+
+    func testFolderStatisticsDistinguishEmptyFoldersAndFollowMovesAndDeletion() throws {
+        let store = try NBNotes(url: database, readOnly: false)
+        let empty = try store.createFolder("Empty", parent: nil)
+        let child = try store.createFolder("Child", parent: empty)
+        func folder(_ id: String) throws -> [String: Any] {
+            try XCTUnwrap(store.listFolders().first { $0["id"] as? String == id } as? [String: Any])
+        }
+        XCTAssertEqual(try folder(empty)["noteCount"] as? Int, 0)
+        XCTAssertEqual(try folder(empty)["subfolderCount"] as? Int, 1)
+        XCTAssertEqual(try folder(child)["path"] as? String, "Empty/Child")
+        XCTAssertEqual(try folder(child)["empty"] as? Bool, true)
+        let encoded = try JSONSerialization.data(withJSONObject: folder(child), options: [.sortedKeys])
+        XCTAssertTrue(String(decoding: encoded, as: UTF8.self).contains("\"empty\":true"))
+        try store.moveNote(noteID, toFolder: child)
+        XCTAssertEqual(try folder(child)["noteCount"] as? Int, 1)
+        XCTAssertEqual(try folder(child)["empty"] as? Bool, false)
+        try store.deleteNote(noteID)
+        XCTAssertEqual(try folder(child)["noteCount"] as? Int, 0)
+        XCTAssertEqual(try folder(child)["empty"] as? Bool, true)
+    }
+
+    func testNativeBooleanFieldsSerializeAsJSONBooleans() throws {
+        let store = try NBNotes(url: database, readOnly: true)
+        let listed = try XCTUnwrap(store.listNotes(inFolder: "Fixture").first)
+        let values = [try store.readNote(noteID), ["hasDocument": try XCTUnwrap(listed["hasDocument"])]]
+        for value in values {
+            let bytes = try JSONSerialization.data(withJSONObject: value, options: [.sortedKeys])
+            let text = String(decoding: bytes, as: UTF8.self)
+            for key in ["bold", "italic", "canRewriteHTML", "hasDocument"] where text.contains("\"\(key)\":") {
+                XCTAssertFalse(text.contains("\"\(key)\":0") || text.contains("\"\(key)\":1"), key)
+            }
+        }
+    }
+
+    func testBackupKeepsDatabaseDrawingsButRejectsMissingFileAttachments() throws {
+        let store = try NBNotes(url: database, readOnly: false)
+        let context = try XCTUnwrap(store.value(forKey: "context") as? NSManagedObjectContext)
+        let request = NSFetchRequest<NSManagedObject>(entityName: "ICAttachment")
+        let attachment = try XCTUnwrap(context.fetch(request).first)
+        attachment.setValue("com.apple.drawing.2", forKey: "typeUTI")
+        attachment.setValue(Data("stored drawing document".utf8), forKey: "mergeableData")
+        try context.save()
+        XCTAssertNoThrow(try store.backupAttachmentPaths())
+        attachment.setValue(nil, forKey: "mergeableData")
+        try context.save()
+        XCTAssertThrowsError(try store.backupAttachmentPaths())
+        attachment.setValue("com.adobe.pdf", forKey: "typeUTI")
+        try context.save()
+        XCTAssertThrowsError(try store.backupAttachmentPaths())
+    }
+
+    func testPinRejectsReadOnlyProtectedAndForeignNotes() throws {
+        let store = try NBNotes(url: database, readOnly: false)
+        XCTAssertThrowsError(try NBNotes(url: database, readOnly: true).editNote(noteID, operation: "pin", options: [:]))
+        XCTAssertThrowsError(try store.editNote("x-coredata://FOREIGN/ICNote/p1", operation: "pin", options: [:]))
+        let context = try XCTUnwrap(store.value(forKey: "context") as? NSManagedObjectContext)
+        let id = try XCTUnwrap(context.persistentStoreCoordinator?.managedObjectID(forURIRepresentation: URL(string: noteID)!))
+        let note = try context.existingObject(with: id)
+        note.setValue(true, forKey: "isPasswordProtected")
+        try context.save()
+        for operation in ["pin", "unpin"] { XCTAssertThrowsError(try store.editNote(noteID, operation: operation, options: [:])) }
+        XCTAssertFalse(note.value(forKey: "isPinned") as? Bool == true)
+    }
+
     func testMetadataChangesLeaveStoredDocumentBytesUntouched() throws {
         let store = try NBNotes(url: database, readOnly: false)
         let folder = try store.createFolder("Metadata destination", parent: "Fixture")
@@ -336,6 +545,64 @@ final class LocalNotesTests: XCTestCase {
         let reopened = try NBNotes(url: database, readOnly: true)
         XCTAssertEqual(try reopened.readNote(source)["text"] as? String, "Source\nAlpha bold omega\n")
         XCTAssertEqual((try reopened.readNote(target)["attachments"] as? [[String: Any]])?.first?["id"] as? String, attachment)
+    }
+
+    func testCLIExportsAllAttachmentsWithoutChangingNotesOrOverwritingFiles() throws {
+        let store = try NBNotes(url: database, readOnly: false)
+        let id = try store.createNote(inFolder: "Fixture", html: "<h1>Download fixture</h1><p>Keep this text</p>")
+        for name in ["receipt.txt", "image.txt"] {
+            let file = directory.appendingPathComponent(name)
+            try Data(name.utf8).write(to: file)
+            _ = try store.editNote(id, operation: "attachment-add", options: ["file": file.path])
+        }
+        _ = try store.editNote(id, operation: "tag-add", options: ["name": "export-test"])
+        _ = try store.editNote(id, operation: "link-add", options: ["target": targetID!])
+        _ = try store.editNote(id, operation: "table-new", options: ["rows": 2, "columns": 2])
+        let before = try store.readNote(id)
+        let container = directory.appendingPathComponent("Library/Group Containers/group.com.apple.notes")
+        try FileManager.default.createDirectory(at: container, withIntermediateDirectories: true)
+        func run(_ arguments: [String], isolated: Bool = true) throws -> (Int32, String, String) {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: ".build/debug/nb")
+            process.arguments = arguments
+            if isolated {
+                var environment = ProcessInfo.processInfo.environment
+                environment["CFFIXED_USER_HOME"] = directory.path
+                process.environment = environment
+            }
+            let output = Pipe(), errors = Pipe()
+            process.standardOutput = output
+            process.standardError = errors
+            try process.run()
+            let text = String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+            let error = String(decoding: errors.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+            process.waitUntilExit()
+            return (process.terminationStatus, text, error)
+        }
+        XCTAssertEqual(try run(["snapshot-db", container.appendingPathComponent("NoteStore.sqlite").path, "--database", database.path], isolated: false).0, 0)
+        let destination = directory.appendingPathComponent("exported")
+        let result = try run(["attachments", "export", id, "--directory", destination.path])
+        XCTAssertEqual(result.0, 0, result.2)
+        guard result.0 == 0 else { return }
+        let paths = result.1.split(separator: "\n").map(String.init)
+        XCTAssertEqual(paths.count, 2)
+        for path in paths {
+            let file = URL(fileURLWithPath: path)
+            XCTAssertEqual(try Data(contentsOf: file), Data(file.lastPathComponent.utf8))
+        }
+        let again = try run(["attachments", "export", id, "--directory", destination.path])
+        XCTAssertNotEqual(again.0, 0)
+        XCTAssertTrue(again.1.isEmpty)
+        let jsonResult = try run(["attachments", "export", id, "--directory", directory.appendingPathComponent("json-export").path, "--json"])
+        XCTAssertEqual(jsonResult.0, 0, jsonResult.2)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(jsonResult.1.utf8)) as? [String: Any])
+        XCTAssertEqual((json["files"] as? [[String: Any]])?.count, 2)
+        let after = try NBNotes(url: container.appendingPathComponent("NoteStore.sqlite"), readOnly: true).readNote(id)
+        XCTAssertEqual(after["text"] as? String, before["text"] as? String)
+        XCTAssertEqual(after["attachments"] as? NSArray, before["attachments"] as? NSArray)
+        XCTAssertEqual(after["tags"] as? NSArray, before["tags"] as? NSArray)
+        XCTAssertEqual(after["links"] as? NSArray, before["links"] as? NSArray)
+        XCTAssertEqual(after["tables"] as? NSArray, before["tables"] as? NSArray)
     }
 
     func testFormatAndChecklistKeepAttachment() throws {

@@ -2,6 +2,7 @@ import ArgumentParser
 import Foundation
 
 struct New: ParsableCommand {
+    @OptionGroup var output: OutputOptions
     static let configuration = CommandConfiguration(
         abstract: "Create a note and print its id",
         discussion: """
@@ -10,23 +11,25 @@ struct New: ParsableCommand {
         Without --html the note has only the title.
 
         EXAMPLES
-          notes-buddy new --folder Work --title "Plan" --html body.html
-          echo '<p>Buy <b>milk</b></p>' | notes-buddy new --folder Home --title "Shopping" --html -
+          nb new --folder Work --title "Plan" --html body.html
+          echo '<p>Buy <b>milk</b></p>' | nb new --folder Home --title "Shopping" --html -
         """
     )
 
-    @Option(help: "Folder name, must exist") var folder: String
+    @Option(help: "Existing folder name or id") var folder: String
     @Option(help: "Title, placed above the body as a heading") var title: String?
     @Option(help: "HTML body file, - for stdin") var html: String?
 
     func run() throws {
         let heading = title.map { "<h1>\(escapeHTML($0))</h1>" } ?? ""
         let body = heading + (try readHTML(from: html))
-        print(try openLocalNotes(readOnly: false).createNote(inFolder: folder, html: body))
+        let id = try openLocalNotes(readOnly: false).createNote(inFolder: folder, html: body)
+        try output.writeAction("new", noteActionData(id: id, fields: ["created": true]), text: id)
     }
 }
 
 struct Remove: ParsableCommand {
+    @OptionGroup var output: OutputOptions
     static let configuration = CommandConfiguration(
         commandName: "rm",
         abstract: "Delete a note (moves it to Recently Deleted)",
@@ -34,7 +37,7 @@ struct Remove: ParsableCommand {
         The note goes to Recently Deleted in Notes and can be restored there.
 
         EXAMPLE
-          notes-buddy rm <id>
+          nb rm <id>
         """
     )
 
@@ -42,10 +45,12 @@ struct Remove: ParsableCommand {
 
     func run() throws {
         try openLocalNotes(readOnly: false).deleteNote(id)
+        try output.writeAction("rm", noteActionData(id: id, fields: ["deleted": true]), text: id)
     }
 }
 
 struct Move: ParsableCommand {
+    @OptionGroup var output: OutputOptions
     static let configuration = CommandConfiguration(
         commandName: "mv",
         abstract: "Move a note to another folder",
@@ -53,19 +58,47 @@ struct Move: ParsableCommand {
         Moves the note to an existing folder. The note id stays the same.
 
         EXAMPLE
-          notes-buddy mv <id> --folder Archive
+          nb mv <id> --folder Archive
         """
     )
 
     @Argument(help: "Note id from `ls` or `new`") var id: String
-    @Option(help: "Target folder name") var folder: String
+    @Option(help: "Target folder name or id") var folder: String
 
     func run() throws {
         try openLocalNotes(readOnly: false).moveNote(id, toFolder: folder)
+        try output.writeAction("mv", noteActionData(id: id, fields: ["moved": true]), text: id)
+    }
+}
+
+struct Pin: ParsableCommand {
+    @OptionGroup var output: OutputOptions
+    @OptionGroup var note: LocalNoteOptions
+    static let configuration = CommandConfiguration(
+        abstract: "Pin a note in its folder",
+        discussion: "Repeating pin keeps the note pinned. Content stays unchanged. Example: nb pin <id>"
+    )
+
+    func run() throws {
+        try output.writeAction("pin", note.open(readOnly: false).editNote(note.id, operation: "pin", options: [:]), text: note.id)
+    }
+}
+
+struct Unpin: ParsableCommand {
+    @OptionGroup var output: OutputOptions
+    @OptionGroup var note: LocalNoteOptions
+    static let configuration = CommandConfiguration(
+        abstract: "Unpin a note in its folder",
+        discussion: "Repeating unpin keeps the note unpinned. Content stays unchanged. Example: nb unpin <id>"
+    )
+
+    func run() throws {
+        try output.writeAction("unpin", note.open(readOnly: false).editNote(note.id, operation: "unpin", options: [:]), text: note.id)
     }
 }
 
 struct Append: ParsableCommand {
+    @OptionGroup var output: OutputOptions
     static let configuration = CommandConfiguration(
         abstract: "Add HTML to the end of a note without attachments",
         discussion: """
@@ -73,7 +106,7 @@ struct Append: ParsableCommand {
         Refuses on attachments, links, tags, checklists and shared notes. Prefer insert for native text edits.
 
         EXAMPLE
-          echo '<p>Done</p>' | notes-buddy append <id> --html -
+          echo '<p>Done</p>' | nb append <id> --html -
         """
     )
 
@@ -82,10 +115,12 @@ struct Append: ParsableCommand {
 
     func run() throws {
         try setNoteBody(id: id, html: try noteBody(id: id) + readHTML(from: html))
+        try output.writeAction("append", noteActionData(id: id, fields: ["updated": true]), text: id)
     }
 }
 
 struct Replace: ParsableCommand {
+    @OptionGroup var output: OutputOptions
     static let configuration = CommandConfiguration(
         abstract: "Replace a fragment of the HTML body in a note without attachments",
         discussion: """
@@ -94,8 +129,8 @@ struct Replace: ParsableCommand {
         Refuses on attachments, links, tags, checklists and shared notes. Prefer edit for native text edits.
 
         EXAMPLES
-          notes-buddy replace <id> --find "OLD" --with "NEW"
-          notes-buddy replace <id> --find "<b>draft</b>" --with "<i>final</i>"
+          nb replace <id> --find "OLD" --with "NEW"
+          nb replace <id> --find "<b>draft</b>" --with "<i>final</i>"
         """
     )
 
@@ -111,19 +146,21 @@ struct Replace: ParsableCommand {
         guard count > 0 else { throw NotesError(description: "fragment not found in the HTML body") }
         guard count == 1 || all else { throw NotesError(description: "fragment occurs \(count) times, use --all") }
         try setNoteBody(id: id, html: body.replacingOccurrences(of: find, with: replacement))
+        try output.writeAction("replace", noteActionData(id: id, fields: ["updated": true]), text: id)
     }
 }
 
 struct Attach: ParsableCommand {
+    @OptionGroup var output: OutputOptions
     static let configuration = CommandConfiguration(
         abstract: "Attach a file to a note",
         discussion: """
         Adds the file to the end of the note, for example a PDF. Notes shows it inline.
         Works on notes that already have attachments, and does not change the text.
-        Prints "attached <name>" after saving. Notes quits automatically before writing.
+        Prints the note URL after saving. Notes quits automatically before writing.
 
         EXAMPLE
-          notes-buddy attach <id> report.pdf
+          nb attach <id> report.pdf
         """
     )
 
@@ -137,6 +174,6 @@ struct Attach: ParsableCommand {
         }
         _ = try openLocalNotes(readOnly: false)
             .editNote(id, operation: "attachment-add", options: ["file": url.path])
-        print("attached \(url.lastPathComponent)")
+        try output.writeAction("attach", noteActionData(id: id, fields: ["file": url.path, "attached": true]), text: id)
     }
 }

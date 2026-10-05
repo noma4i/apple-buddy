@@ -6,6 +6,7 @@ import NotesNative
 func requestNotesSync() throws -> NSRunningApplication {
     guard let application = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.Notes") else { throw NotesError(description: "Notes application not found, local changes remain saved") }
     try quitNotes(NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.Notes"))
+    try autoreleasepool { try openLocalNotes(readOnly: false).pruneEmptyActivityEvents() }
     var configurationError: NSError?
     guard let configuration = NBNotesBackgroundConfiguration(&configurationError) else {
         throw configurationError ?? NotesError(description: "Background Notes launch is unavailable, local changes remain saved")
@@ -50,7 +51,12 @@ func synchronizeNotes() throws -> [AnyHashable: Any] {
         }
         throw error
     }
-    return try result.get()
+    _ = try result.get()
+    let state = try autoreleasepool { try openLocalNotes(readOnly: true).cloudStatus() }
+    guard state["pendingObjects"] as? Int == 0 else {
+        throw NotesError(description: "Notes saved additional changes during shutdown, local changes remain saved and queued")
+    }
+    return state
 }
 
 func waitForNotesSync(_ application: NSRunningApplication) throws -> [AnyHashable: Any] {
@@ -69,26 +75,19 @@ func waitForNotesSync(_ application: NSRunningApplication) throws -> [AnyHashabl
 }
 
 struct Sync: ParsableCommand {
-    static let configuration = CommandConfiguration(abstract: "Start Notes background synchronization or read CloudKit acknowledgement status", discussion: """
-        Uses native macOS application launch APIs, never AppleScript or UI scripting.
-        Notes runs background-only, without windows, Dock icon or activation, to upload queued changes.
-        Every saved CLI write starts Notes and waits for iCloud acknowledgement without extra flags.
-        During bulk import Notes stays closed. Each note is saved to its durable upload queue.
-        Launch completion means sync was requested, not that iCloud acknowledged the data.
-        --status reads private Notes cloud-state APIs without launching or quitting Notes.
-        Synchronization waits for an empty upload queue and fails after 120 seconds.
-        A timeout exits nonzero. Local changes remain saved and queued for upload.
-        Writes quit Notes before editing. Sync quits Notes after waiting, including on error.
-        Ctrl-C, SIGTERM and SIGHUP stop synchronization and quit Notes with a nonzero CLI exit.
+    @OptionGroup var output: OutputOptions
+    static let configuration = CommandConfiguration(abstract: "Synchronize saved changes with iCloud", discussion: """
+        Writes sync automatically. Notes stays hidden and exits when finished.
+        Success confirms iCloud acknowledgement. A timeout leaves changes saved for retry.
 
         EXAMPLES
-          notes-buddy sync
-          notes-buddy sync --status
+          nb sync
+          nb sync --status
         """)
-    @Flag(help: "Read cloud-state counters without starting Notes") var status = false
+    @Flag(help: "Read status without launching Notes") var status = false
 
     func run() throws {
-        if status { try printDictionary(openLocalNotes(readOnly: true).cloudStatus()); return }
-        try printDictionary(synchronizeNotes())
+        if status { try output.write(openLocalNotes(readOnly: true).cloudStatus()); return }
+        try output.write(synchronizeNotes())
     }
 }

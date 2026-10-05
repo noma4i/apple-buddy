@@ -1,0 +1,57 @@
+name: Update Homebrew tap
+
+on:
+  push:
+    branches: [master]
+    paths-ignore:
+      - "Formula/**"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: homebrew-master
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: macos-26
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+      - name: Check formula updates
+        run: /usr/bin/ruby Tests/homebrew_test.rb
+      - name: Build release
+        run: swift build -c release --disable-sandbox
+      - name: Check command help
+        run: swift test --filter HelpTests
+      - name: Check release help
+        run: |
+          .build/release/nb help
+          .build/release/nb search help
+      - name: Update formula
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+        run: |
+          /usr/bin/ruby Scripts/update-homebrew.rb "$SOURCE_SHA" "$(git rev-list --count "$SOURCE_SHA")"
+          /usr/bin/ruby -c Formula/nb.rb
+      - name: Publish formula to master
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+        run: |
+          git fetch origin master
+          if [ "$(git rev-parse origin/master)" != "$SOURCE_SHA" ]; then
+            echo "A newer push exists. Leave the formula update to that workflow."
+            exit 0
+          fi
+          if git diff --quiet -- Formula/nb.rb; then
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Formula/nb.rb
+          git commit -m "Update Homebrew formula"
+          git push origin HEAD:master

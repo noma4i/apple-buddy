@@ -4,6 +4,7 @@ import Foundation
 import SQLite3
 
 struct SnapshotDatabase: ParsableCommand {
+    @OptionGroup var output: OutputOptions
     static let configuration = CommandConfiguration(
         commandName: "snapshot-db",
         abstract: "Copy a database, including committed WAL data, for offline inspection",
@@ -40,10 +41,19 @@ struct SnapshotDatabase: ParsableCommand {
             }
             throw error
         }
-        print(target.path)
+        try output.write(["path": target.path], text: target.path)
     }
 
-    private func copyDatabase(from source: URL, to target: URL) throws {
+    func copyDatabase(from source: URL, to target: URL) throws {
+        let result = Result { try writeDatabaseCopy(from: source, to: target) }
+        for suffix in ["-shm", "-wal", "-journal"] {
+            let sidecar = URL(fileURLWithPath: target.path + suffix)
+            if FileManager.default.fileExists(atPath: sidecar.path) { try FileManager.default.removeItem(at: sidecar) }
+        }
+        try result.get()
+    }
+
+    private func writeDatabaseCopy(from source: URL, to target: URL) throws {
         var input: OpaquePointer?
         var output: OpaquePointer?
         defer {

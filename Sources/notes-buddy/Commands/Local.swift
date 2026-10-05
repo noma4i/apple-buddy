@@ -42,22 +42,19 @@ struct PositionOptions: ParsableArguments {
     }
 }
 
-func printDictionary(_ value: [AnyHashable: Any]) throws {
-    let data = try JSONSerialization.data(withJSONObject: value, options: [.prettyPrinted, .sortedKeys])
-    print(String(decoding: data, as: UTF8.self))
-}
-
 struct Inspect: ParsableCommand {
-    static let configuration = CommandConfiguration(abstract: "Read native text, formatting, attachments, tags, links and tables as JSON", discussion: "Reads this computer's Notes database without changing it. Objects appear in text as U+FFFC. Use returned ids for attachments and links. Example: notes-buddy inspect <id>")
+    @OptionGroup var output: OutputOptions
+    static let configuration = CommandConfiguration(abstract: "Read native text, formatting, attachments, tags, links and tables", discussion: "Reads this computer's Notes database without changing it. Objects appear in text as U+FFFC. Use returned ids for attachments and links. Add --json for structured data. Example: nb inspect <id>")
     @OptionGroup var note: LocalNoteOptions
 
     func run() throws {
-        try printDictionary(note.open(readOnly: true).readNote(note.id))
+        try output.write(note.open(readOnly: true).readNote(note.id))
     }
 }
 
 struct Edit: ParsableCommand {
-    static let configuration = CommandConfiguration(abstract: "Replace visible text while preserving attachments and formatting", discussion: "Matches literal visible text, not HTML. Missing or ambiguous matches fail without saving. Use --all for every match. Cannot match across object markers. Example: notes-buddy edit <id> --find draft --with final")
+    @OptionGroup var output: OutputOptions
+    static let configuration = CommandConfiguration(abstract: "Replace visible text while preserving attachments and formatting", discussion: "Matches literal visible text, not HTML. Missing or ambiguous matches fail without saving. Use --all for every match. Cannot match across object markers. Example: nb edit <id> --find draft --with final")
     @OptionGroup var note: LocalNoteOptions
     @Option(help: "Exact visible text to find") var find: String
     @Option(name: .customLong("with"), help: "Replacement text") var replacement: String
@@ -65,12 +62,13 @@ struct Edit: ParsableCommand {
 
     func run() throws {
         let store = try note.open(readOnly: false)
-        try printDictionary(store.editNote(note.id, operation: "replace", options: ["find": find, "replacement": replacement, "all": all]))
+        try output.writeAction("edit", store.editNote(note.id, operation: "replace", options: ["find": find, "replacement": replacement, "all": all]), text: note.id)
     }
 }
 
 struct Insert: ParsableCommand {
-    static let configuration = CommandConfiguration(abstract: "Insert visible text at an anchor, or append it", discussion: "Without an anchor, appends plain text. --before and --after require one exact match and cannot be combined. Example: notes-buddy insert <id> --text 'See also: ' --after Summary")
+    @OptionGroup var output: OutputOptions
+    static let configuration = CommandConfiguration(abstract: "Insert visible text at an anchor, or append it", discussion: "Without an anchor, appends plain text. --before and --after require one exact match and cannot be combined. Example: nb insert <id> --text 'See also: ' --after Summary")
     @OptionGroup var note: LocalNoteOptions
     @OptionGroup var position: PositionOptions
     @Option(help: "Text to insert") var text: String
@@ -78,12 +76,13 @@ struct Insert: ParsableCommand {
     func run() throws {
         var options = try position.values()
         options["text"] = text
-        try printDictionary(note.open(readOnly: false).editNote(note.id, operation: "insert", options: options))
+        try output.writeAction("insert", note.open(readOnly: false).editNote(note.id, operation: "insert", options: options), text: note.id)
     }
 }
 
 struct Format: ParsableCommand {
-    static let configuration = CommandConfiguration(abstract: "Format selected text or its paragraphs, including checklists", discussion: "Inline styles affect selected text. Paragraph styles affect each selected paragraph. --off removes an inline style. --style body removes lists or headings. Checklist items are unchecked unless --checked is set. Example: notes-buddy format <id> --find 'Buy milk' --style checklist --checked")
+    @OptionGroup var output: OutputOptions
+    static let configuration = CommandConfiguration(abstract: "Format selected text or its paragraphs, including checklists", discussion: "Inline styles affect selected text. Paragraph styles affect each selected paragraph. --off removes an inline style. --style body removes lists or headings. Checklist items are unchecked unless --checked is set. Example: nb format <id> --find 'Buy milk' --style checklist --checked")
     @OptionGroup var note: LocalNoteOptions
     @Option(help: "Exact visible text to select") var find: String
     @Option(help: "bold, italic, underline, strikethrough, title, heading, subheading, body, monospace, bullet, numbered, checklist") var style: String
@@ -92,12 +91,13 @@ struct Format: ParsableCommand {
     @Flag(help: "Format all occurrences") var all = false
 
     func run() throws {
-        try printDictionary(note.open(readOnly: false).editNote(note.id, operation: "format", options: ["find": find, "style": style, "off": off, "checked": checked, "all": all]))
+        try output.writeAction("format", note.open(readOnly: false).editNote(note.id, operation: "format", options: ["find": find, "style": style, "off": off, "checked": checked, "all": all]), text: note.id)
     }
 }
 
 struct Tags: ParsableCommand {
-    static let configuration = CommandConfiguration(abstract: "List, add or remove native tags on a note", discussion: "Without options, prints tags as JSON. Separate names with slashes, commas or whitespace. Each name becomes a distinct native tag, not text. Duplicates are ignored. Invalid names reject the whole batch. --remove uses the same separators and affects only this note. Search with ls --tag. Example: notes-buddy tags <id> --add 'invoices/tech,other'")
+    @OptionGroup var output: OutputOptions
+    static let configuration = CommandConfiguration(abstract: "List, add or remove native tags on a note", discussion: "Without --add or --remove, lists tags. Add --json for structured data. Separate names with slashes, commas or whitespace. Each name becomes a distinct native tag, not text. Duplicates are ignored. Invalid names reject the whole batch. --remove uses the same separators and affects only this note. Search with ls --tag. Example: nb tags <id> --add 'invoices/tech,other'")
     @OptionGroup var note: LocalNoteOptions
     @Option(help: "Native tags to add, separated by slash, comma or whitespace") var add: String?
     @Option(help: "Native tags to remove, separated by slash, comma or whitespace") var remove: String?
@@ -105,52 +105,64 @@ struct Tags: ParsableCommand {
     func run() throws {
         guard add == nil || remove == nil else { throw ValidationError("choose either --add or --remove") }
         let store = try note.open(readOnly: add == nil && remove == nil)
-        if let add { return try printDictionary(store.editNote(note.id, operation: "tag-add", options: ["name": add])) }
-        if let remove { return try printDictionary(store.editNote(note.id, operation: "tag-remove", options: ["name": remove])) }
-        try printDictionary(["tags": store.readNote(note.id)["tags"]!])
+        if let add { return try output.writeAction("tags add", store.editNote(note.id, operation: "tag-add", options: ["name": add]), text: note.id) }
+        if let remove { return try output.writeAction("tags rm", store.editNote(note.id, operation: "tag-remove", options: ["name": remove]), text: note.id) }
+        try output.write(["tags": store.readNote(note.id)["tags"]!])
     }
 }
 
 struct Attachments: ParsableCommand {
+    @OptionGroup var output: OutputOptions
     enum Action: String, ExpressibleByArgument { case ls, export, add, rm, replace, mv, view }
     static let configuration = CommandConfiguration(abstract: "List, export, add, remove, replace, move or resize note attachments", discussion: """
-        Ids come from inspect or attachments ls. Output is JSON, except export prints the destination path.
-        export copies a local file and refuses an existing destination. It does not download iCloud files.
-        add inserts a file at --before, --after, or the end. rm removes the object, not the original input file.
-        replace swaps the file at its existing position. mv moves it to --to within the same account.
-        view writes size 0, 1 or 2. The visual effect depends on the file type.
-        Writes automatically quit Notes normally. Export before rm if you need a copy.
+        Get attachment ids with ls. Export before rm to keep a copy.
+        Edits print the note URL. Export prints the saved path.
 
         EXAMPLES
-          notes-buddy attachments ls <id>
-          notes-buddy attachments add <id> --file report.pdf --after Summary
-          notes-buddy attachments export <id> --attachment <attachment-id> --file saved.pdf
-          notes-buddy attachments replace <id> --attachment <attachment-id> --file updated.pdf
-          notes-buddy attachments mv <id> --attachment <attachment-id> --to <target-id>
-          notes-buddy attachments view <id> --attachment <attachment-id> --size 1
-          notes-buddy attachments rm <id> --attachment <attachment-id>
+          nb attachments ls <id>
+          nb attachments add <id> --file report.pdf
+          nb attachments export <id> --attachment <attachment-id> --file saved.pdf
+          nb attachments export <id> --directory saved-files
         """)
     @Argument(help: "ls, export, add, rm, replace, mv, view") var action: Action
     @OptionGroup var note: LocalNoteOptions
     @OptionGroup var position: PositionOptions
     @Option(help: "Attachment id from inspect or attachments ls") var attachment: String?
     @Option(help: "Input file for add or replace, output file for export") var file: String?
+    @Option(help: "Export all files, or the selected attachment, into this directory") var directory: String?
     @Option(help: "Destination note id for mv") var to: String?
     @Option(help: "Notes view size: 0 (default), 1 or 2") var size: Int?
 
+    func validate() throws {
+        let options: [(String, Bool, [Action])] = [
+            ("--attachment", attachment != nil, [.export, .rm, .replace, .mv, .view]),
+            ("--file", file != nil, [.export, .add, .replace]),
+            ("--directory", directory != nil, [.export]),
+            ("--to", to != nil, [.mv]),
+            ("--size", size != nil, [.view]),
+            ("--before/--after", position.before != nil || position.after != nil, [.add, .mv])
+        ]
+        for (name, supplied, actions) in options where supplied && !actions.contains(action) {
+            throw ValidationError("\(name) is not valid for attachments \(action.rawValue)")
+        }
+        _ = try position.values()
+        if let size, !(0...2).contains(size) { throw ValidationError("--size must be 0, 1 or 2") }
+    }
+
     func run() throws {
+        try validate()
         let store = try note.open(readOnly: action == .ls || action == .export)
-        if action == .ls { return try printDictionary(["attachments": store.readNote(note.id)["attachments"]!]) }
+        if action == .ls { return try output.write(["attachments": store.readNote(note.id)["attachments"]!]) }
         if action == .export {
-            guard let attachment, let file else { throw ValidationError("export requires --attachment and --file") }
-            let items = try store.readNote(note.id)["attachments"] as? [[String: Any]]
-            guard let item = items?.first(where: { $0["id"] as? String == attachment }),
-                  let path = item["path"] as? String, item["available"] as? Bool == true else {
-                throw ValidationError("attachment file is not available locally")
+            guard let items = try store.readNote(note.id)["attachments"] as? [[String: Any]] else {
+                throw ValidationError("Notes returned invalid attachments")
             }
-            let destination = URL(fileURLWithPath: file)
-            try FileManager.default.copyItem(at: URL(fileURLWithPath: path), to: destination)
-            print(destination.path)
+            let files = try exportFiles(items)
+            if file != nil, let saved = files.first {
+                try output.write(["path": saved["path"]!, "id": note.id, "attachment": saved["attachment"]!], text: saved["path"]!)
+            } else {
+                try output.write(["id": note.id, "files": files], text: files.map { $0["path"]! }.joined(separator: "\n"))
+            }
             return
         }
         var options = try position.values()
@@ -171,22 +183,63 @@ struct Attachments: ParsableCommand {
             options["size"] = size
         }
         let operation = action == .rm ? "remove" : action == .mv ? "move" : action.rawValue
-        try printDictionary(store.editNote(note.id, operation: "attachment-" + operation, options: options))
+        try output.writeAction("attachments " + action.rawValue, store.editNote(note.id, operation: "attachment-" + operation, options: options), text: note.id)
+    }
+
+    func exportFiles(_ items: [[String: Any]]) throws -> [[String: String]] {
+        guard (file != nil) != (directory != nil), file == nil || attachment != nil else {
+            throw ValidationError("export requires --directory or both --attachment and --file")
+        }
+        let selected = items.filter { attachment == nil ? $0["type"] as? String != "com.apple.notes.table" : $0["id"] as? String == attachment }
+        guard attachment == nil || selected.count == 1 else { throw ValidationError("attachment not found in this note") }
+        var copies: [(URL, URL, String)] = []
+        var names = Set<String>()
+        for item in selected {
+            guard let id = item["id"] as? String, let path = item["path"] as? String, item["available"] as? Bool == true else {
+                throw ValidationError("attachment file is not available locally")
+            }
+            let source = URL(fileURLWithPath: path)
+            guard FileManager.default.fileExists(atPath: source.path) else { throw ValidationError("attachment file is not available locally") }
+            let destination: URL
+            if let file { destination = URL(fileURLWithPath: file) }
+            else {
+                let folder = URL(fileURLWithPath: directory!)
+                var name = source.lastPathComponent
+                var number = 2
+                while !names.insert(name.lowercased()).inserted {
+                    name = source.deletingPathExtension().lastPathComponent + " (\(number))" + (source.pathExtension.isEmpty ? "" : "." + source.pathExtension)
+                    number += 1
+                }
+                destination = folder.appendingPathComponent(name)
+            }
+            guard !FileManager.default.fileExists(atPath: destination.path) else {
+                throw ValidationError("destination already exists: \(destination.path)")
+            }
+            copies.append((source, destination, id))
+        }
+        if let directory, !copies.isEmpty {
+            try FileManager.default.createDirectory(at: URL(fileURLWithPath: directory), withIntermediateDirectories: true)
+        }
+        var exported: [[String: String]] = []
+        for (source, destination, id) in copies {
+            try FileManager.default.copyItem(at: source, to: destination)
+            exported.append(["attachment": id, "path": destination.path])
+        }
+        return exported
     }
 }
 
 struct Links: ParsableCommand {
+    @OptionGroup var output: OutputOptions
     enum Action: String, ExpressibleByArgument { case ls, add, rm }
     static let configuration = CommandConfiguration(abstract: "Create, list and remove native cross-references between notes", discussion: """
-        Creates a native Notes link using the target note's title. The target must exist in this database.
-        ls prints link ids and target note ids. A missing target means the target is unavailable.
-        add inserts at --before, --after, or the end. rm removes only the link, never the target note.
-        Links are one-way. For links both ways, run add once from each note. Output is JSON.
+        Links are one-way. Get link ids with ls.
+        rm removes the link, not the target note.
 
         EXAMPLES
-          notes-buddy links add <source-id> --to <target-id> --after Summary
-          notes-buddy links ls <source-id>
-          notes-buddy links rm <source-id> --link <link-id>
+          nb links add <source-id> --to <target-id>
+          nb links ls <source-id>
+          nb links rm <source-id> --link <link-id>
         """)
     @Argument(help: "ls, add or rm") var action: Action
     @OptionGroup var note: LocalNoteOptions
@@ -194,7 +247,17 @@ struct Links: ParsableCommand {
     @Option(help: "Target note id for add") var to: String?
     @Option(help: "Link id from links ls, required for rm") var link: String?
 
+    func validate() throws {
+        guard to == nil || action == .add else { throw ValidationError("--to is only valid for links add") }
+        guard link == nil || action == .rm else { throw ValidationError("--link is only valid for links rm") }
+        guard (position.before == nil && position.after == nil) || action == .add else {
+            throw ValidationError("--before/--after is only valid for links add")
+        }
+        _ = try position.values()
+    }
+
     func run() throws {
+        try validate()
         var options = try position.values()
         if action == .add {
             guard let to else { throw ValidationError("add requires --to") }
@@ -205,38 +268,24 @@ struct Links: ParsableCommand {
             options["link"] = link
         }
         let store = try note.open(readOnly: action == .ls)
-        if action == .ls { return try printDictionary(["links": store.readNote(note.id)["links"]!]) }
-        try printDictionary(store.editNote(note.id, operation: action == .add ? "link-add" : "link-remove", options: options))
+        if action == .ls { return try output.write(["links": store.readNote(note.id)["links"]!]) }
+        try output.writeAction("links " + action.rawValue, store.editNote(note.id, operation: action == .add ? "link-add" : "link-remove", options: options), text: note.id)
     }
 }
 
 struct Search: ParsableCommand {
+    @OptionGroup var output: OutputOptions
     enum Field: String, ExpressibleByArgument { case all, id, title, text, attachment, tag, link, document }
     static let configuration = CommandConfiguration(abstract: "Find notes by text, title, id, table cells, tags, links or attachment filename", discussion: """
-        Searches this computer's Notes database without launching Notes. Prints JSON.
-        Partial phrases ignore case, accents and whitespace differences. The default field is all.
-        Fuzzy matching is enabled by default. Each alphabetic word of 4 or more letters allows one insertion, deletion, substitution or adjacent transposition.
-        Three-letter words allow adjacent transpositions only. Numbers, punctuation and ids stay literal.
-        Exact matches rank before fuzzy matches. Within each group, newest notes come first.
-        text includes table cells. attachment searches filenames. all includes existing Notes document indexes.
-        document reads local PDFs and recognizes images and scanned PDF pages through Apple Vision.
-        all searches document contents automatically. Exact existing index matches avoid repeated extraction.
-        No network access or database writes occur.
-        JSON reports scannedDocuments, unavailableDocuments and documentErrors. OCR can be slow.
-        id accepts a complete or partial local note id. tag searches native tag names.
-        link searches native link labels. --folder accepts an exact folder name or local folder id.
-        Deleted notes are excluded. Locked notes are skipped and counted in skippedProtected.
-        Results contain id, title, folder, matchedFields, excerpt and matchType (exact or fuzzy).
-        total is the count before pagination. Use --offset and --limit for more results.
+        Prints only note URLs, one per line. No matches produce no stdout.
+        Fuzzy matching is enabled by default. Exact matches rank first.
+        all searches document contents automatically, including PDF text and image text.
+        Add --json for titles, excerpts and match details. Locked and deleted notes are excluded.
 
         EXAMPLES
-          notes-buddy search invoice
-          notes-buddy search report.pdf --field attachment
-          notes-buddy search "Invoice number" --field document --folder invoices
-          notes-buddy search p123 --field id
-          notes-buddy search project --field tag --folder Work
-          notes-buddy search budget --field text --limit 20 --offset 20
-          notes-buddy inspect <id-from-search>
+          nb search invoice
+          nb search "Invoice number" --field document
+          nb search project --field tag --json
         """)
     @Argument(help: "Nonempty text or id fragment to find") var query: String
     @Option(help: "all, id, title, text, attachment, tag, link or document") var field: Field = .all
@@ -248,6 +297,20 @@ struct Search: ParsableCommand {
         guard limit > 0 && offset >= 0 else { throw ValidationError("--limit must be positive and --offset nonnegative") }
         var options: [String: Any] = ["field": field.rawValue, "limit": limit, "offset": offset]
         if let folder { options["folder"] = folder }
-        try printDictionary(openLocalNotes(readOnly: true).search(query, options: options))
+        let result = try openLocalNotes(readOnly: true).search(query, options: options)
+        guard let notes = result["notes"] as? [[String: Any]] else { throw NotesError(description: "Notes returned invalid search results") }
+        let ids = try notes.map { note in
+            guard let id = note["id"] as? String else { throw NotesError(description: "Notes returned a search result without an id") }
+            return id
+        }
+        if let errors = result["documentErrors"] as? [[String: String]] {
+            for error in errors {
+                guard let attachment = error["attachment"], let message = error["error"] else { throw NotesError(description: "Notes returned invalid document diagnostics") }
+                FileHandle.standardError.write(Data("Document error: \(attachment) \(message)\n".utf8))
+            }
+        }
+        try output.write(result, text: ids.joined(separator: "\n"))
+        guard let total = result["total"] as? Int else { throw NotesError(description: "Notes returned invalid search count") }
+        output.summary("\(ids.count) of \(total) notes")
     }
 }
