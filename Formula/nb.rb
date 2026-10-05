@@ -2,7 +2,7 @@ class Nb < Formula
   desc "Read, search, edit and organize Apple Notes"
   homepage "https://github.com/noma4i/notes-buddy"
   url "https://github.com/noma4i/notes-buddy.git", revision: "e1635896b542d7d200fa7e3c8739770673c0e633"
-  version "0.0.1"
+  version "1.0.0"
 
   depends_on :macos
 
@@ -16,6 +16,7 @@ class Nb < Formula
   end
 
   test do
+    assert_equal version.to_s, shell_output("#{bin}/nb version").strip
     assert_match "USAGE: nb", shell_output("#{bin}/nb help")
     assert_match "USAGE: nb search", shell_output("#{bin}/nb search help")
   end

@@ -32,11 +32,12 @@ jobs:
         run: |
           .build/release/nb help
           .build/release/nb search help
+          test "$(.build/release/nb version)" = "$(.build/release/nb --version)"
       - name: Update formula
         env:
           SOURCE_SHA: ${{ github.sha }}
         run: |
-          /usr/bin/ruby Scripts/update-homebrew.rb "$SOURCE_SHA" "$(git rev-list --count "$SOURCE_SHA")"
+          /usr/bin/ruby Scripts/update-homebrew.rb "$SOURCE_SHA"
           /usr/bin/ruby -c Formula/nb.rb
       - name: Publish formula to master
         env:

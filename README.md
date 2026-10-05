@@ -33,6 +33,7 @@ GitHub installation becomes available after the tap changes are pushed and their
 
 ```sh
 nb help
+nb version
 nb search "invoice"
 ```
 
@@ -108,6 +109,7 @@ nb attachments export help
 
 | Task | Commands |
 | --- | --- |
+| Check installed version | `version`, `--version` |
 | Read notes | `ls`, `show`, `inspect` |
 | Open in Notes | `open` |
 | Find notes | `search` |
@@ -215,6 +217,8 @@ Earlier notes can remain saved if a later import fails. Keep stderr and the JSON
 ## Output and safety
 
 Every command accepts `--json` for data. Help and errors always remain text.
+`nb version` and `nb --version` print the release version. `nb version --json` returns its name and version.
+Invalid commands return a nonzero exit code and a help hint. Synchronization failures do not hide saved local changes.
 
 | Default stdout | Commands |
 | --- | --- |

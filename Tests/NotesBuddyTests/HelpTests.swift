@@ -2,6 +2,31 @@ import Foundation
 import XCTest
 
 final class HelpTests: XCTestCase {
+    func testVersionCommandsReturnTheReleaseVersion() throws {
+        for arguments in [["version"], ["--version"]] {
+            let (code, text) = try output(arguments)
+            XCTAssertEqual(code, 0, text)
+            XCTAssertEqual(text.trimmingCharacters(in: .whitespacesAndNewlines), "1.0.0")
+        }
+        let (code, text) = try output(["version", "--json"])
+        XCTAssertEqual(code, 0, text)
+        let data = try JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: String]
+        XCTAssertEqual(data?["version"], "1.0.0")
+    }
+
+    func testInvalidCommandsExplainHowToCorrectTheInput() throws {
+        for (arguments, expected) in [(["unknown"], "Unknown command or extra argument 'unknown'"),
+                                      (["search"], "Provide the argument '<query>'"),
+                                      (["search", "invoice", "--nope"], "Unsupported option '--nope'")] {
+            let (code, text) = try output(arguments)
+            XCTAssertNotEqual(code, 0)
+            XCTAssertTrue(text.contains(expected), text)
+            XCTAssertFalse(text.contains("Unexpected"), text)
+            XCTAssertFalse(text.contains("Missing expected"), text)
+            XCTAssertTrue(text.contains("help' for more information"), text)
+        }
+    }
+
     func testMCPHelpDoesNotPrintAnEmptyOptionsSection() throws {
         let (code, text) = try output(["mcp", "help"])
         XCTAssertEqual(code, 0, text)

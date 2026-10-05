@@ -16,7 +16,7 @@ struct MCPCommand: ParsableCommand {
         let definitions = try MCPToolCommand.all()
         guard let executable = Bundle.main.executableURL else { throw ValidationError("Cannot locate the nb executable") }
         let commands = MCPCommands(executable: executable)
-        let server = Server(name: "notes-buddy", version: "1.0.0",
+        let server = Server(name: "notes-buddy", version: NotesBuddy.releaseVersion,
                             instructions: "Use search or ls to get note UUIDs. Unique prefixes need at least 8 characters. Tools return CLI JSON data. Writes wait for iCloud acknowledgement. Only open displays Notes. Export saves local files. Restore creates an isolated copy, never overwrites live Notes. Use help for command details.",
                             capabilities: .init(tools: .init()))
         let completed = DispatchSemaphore(value: 0)
@@ -99,7 +99,7 @@ struct MCPToolCommand {
 
     private static func make(_ info: CommandInfoV0, command: [String]) -> MCPToolCommand {
         let arguments = (info.arguments ?? []).filter { argument in
-            guard argument.shouldDisplay, let name = argument.valueName, !["json", "help", "action"].contains(name) else { return false }
+            guard argument.shouldDisplay, let name = argument.valueName, !["json", "help", "version", "action"].contains(name) else { return false }
             if command.first == "attachments", let action = command.last.flatMap(Attachments.Action.init(rawValue:)), let actions = Attachments.optionsForActions[name] { return actions.contains(action) }
             if command.first == "links", let action = command.last.flatMap(Links.Action.init(rawValue:)), let actions = Links.optionsForActions[name] { return actions.contains(action) }
             return true
@@ -122,7 +122,7 @@ struct MCPToolCommand {
             types["stdin"] = "string"
         }
         let name = command.joined(separator: "_").replacingOccurrences(of: "-", with: "_")
-        let readOnly = ["folders", "ls", "stats", "show", "search", "inspect", "table_ls", "attachments_ls", "links_ls"].contains(name)
+        let readOnly = ["version", "folders", "ls", "stats", "show", "search", "inspect", "table_ls", "attachments_ls", "links_ls"].contains(name)
         let additive = ["new", "mkfolder", "insert", "attach", "attachments_add", "links_add", "pin", "unpin", "open", "backup", "restore", "snapshot_db", "attachments_export"].contains(name)
         let description = [info.abstract, info.discussion].compactMap { $0 }.joined(separator: "\n\n") + "\nCLI: nb " + command.joined(separator: " ") + ". Returns structured JSON. UUID prefixes need at least 8 characters."
         var schema: [String: Value] = ["type": "object", "properties": .object(properties), "required": .array(required), "additionalProperties": false]
