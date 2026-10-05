@@ -35,7 +35,10 @@ func requestNotesSync() throws -> NSRunningApplication {
     return launchedApplication
 }
 
+var synchronizedWrites: UInt = 0
+
 func synchronizeNotes() throws -> [AnyHashable: Any] {
+    synchronizedWrites = NBCommittedCommandWrites()
     var signalError: NSError?
     guard NBStartNotesSyncSignals(&signalError) else {
         throw signalError ?? NotesError(description: "Cannot register Notes sync interruption signals")

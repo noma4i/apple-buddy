@@ -33,7 +33,7 @@ struct NotesBuddy: ParsableCommand {
             if exitCode(for: error) == .success { print(positionalHelp(fullMessage(for: error))) }
             else { failure = error }
         }
-        if NBCommittedCommandWrites() > 0 {
+        if NBCommittedCommandWrites() > synchronizedWrites {
             do { _ = try synchronizeNotes() }
             catch { if failure == nil { failure = error } else { FileHandle.standardError.write(Data("Sync request failed: \(error)\n".utf8)) } }
         }

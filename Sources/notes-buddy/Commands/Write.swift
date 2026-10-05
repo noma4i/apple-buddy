@@ -71,6 +71,22 @@ struct Move: ParsableCommand {
     }
 }
 
+func writeUntilKeptAfterSync<Result>(_ write: () throws -> Result, synchronize: () throws -> Void, kept: () throws -> Bool) throws -> Result {
+    for _ in 1...3 {
+        let result = try write()
+        try synchronize()
+        if try kept() { return result }
+        FileHandle.standardError.write(Data("iCloud overwrote this change, writing it again\n".utf8))
+    }
+    throw NotesError(description: "iCloud overwrote this change 3 times, the note keeps its previous state. Retry later")
+}
+
+func setPinned(_ pinned: Bool, id: String) throws -> [AnyHashable: Any] {
+    try writeUntilKeptAfterSync({ try autoreleasepool { try openLocalNotes(readOnly: false).editNote(id, operation: pinned ? "pin" : "unpin", options: [:]) } },
+        synchronize: { _ = try synchronizeNotes() },
+        kept: { try autoreleasepool { try openLocalNotes(readOnly: true).readNote(id)["pinned"] as? Bool == pinned } })
+}
+
 struct Pin: ParsableCommand {
     @OptionGroup var output: OutputOptions
     @OptionGroup var note: LocalNoteOptions
@@ -80,7 +96,7 @@ struct Pin: ParsableCommand {
     )
 
     func run() throws {
-        try output.writeAction("pin", note.open(readOnly: false).editNote(note.id, operation: "pin", options: [:]))
+        try output.writeAction("pin", setPinned(true, id: note.id))
     }
 }
 
@@ -93,7 +109,7 @@ struct Unpin: ParsableCommand {
     )
 
     func run() throws {
-        try output.writeAction("unpin", note.open(readOnly: false).editNote(note.id, operation: "unpin", options: [:]))
+        try output.writeAction("unpin", setPinned(false, id: note.id))
     }
 }
 

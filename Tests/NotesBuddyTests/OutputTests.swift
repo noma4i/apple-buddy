@@ -174,6 +174,21 @@ final class OutputTests: XCTestCase {
         XCTAssertTrue(failure.error.contains("Error:"), failure.error)
     }
 
+    func testWriteIsRepeatedUntilItSurvivesSynchronization() throws {
+        var writes = 0, syncs = 0
+        let result = try writeUntilKeptAfterSync({ writes += 1; return writes }, synchronize: { syncs += 1 }, kept: { writes == 2 })
+        XCTAssertEqual([result, writes, syncs], [2, 2, 2])
+        writes = 0; syncs = 0
+        XCTAssertThrowsError(try writeUntilKeptAfterSync({ writes += 1 }, synchronize: { syncs += 1 }, kept: { false })) { error in
+            XCTAssertTrue("\(error)".contains("iCloud overwrote this change 3 times"), "\(error)")
+        }
+        XCTAssertEqual([writes, syncs], [3, 3])
+        struct Stop: Error {}
+        writes = 0
+        XCTAssertThrowsError(try writeUntilKeptAfterSync({ writes += 1 }, synchronize: { throw Stop() }, kept: { true }))
+        XCTAssertEqual(writes, 1)
+    }
+
     func testAttachmentFileIsCheckedBeforeNotesIsOpened() throws {
         let home = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: home, withIntermediateDirectories: false)

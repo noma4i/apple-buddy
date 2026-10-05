@@ -136,6 +136,7 @@ Moves preserve note IDs and contents. `rm` moves notes to Recently Deleted.
 `rmfolder` accepts only empty folders without subfolders.
 
 Pin a note with `nb pin "$note"`. Remove its pin with `nb unpin "$note"`.
+Both commands read the pin again after synchronization. If iCloud overwrote it, they write it again up to 3 times, then return an error.
 Repeated commands keep the requested state. Both sync automatically and preserve note contents.
 Use `nb inspect "$note" --json` to read the `pinned` field.
 
