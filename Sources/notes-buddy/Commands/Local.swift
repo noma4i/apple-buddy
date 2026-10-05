@@ -157,6 +157,7 @@ struct Attachments: ParsableCommand {
         let supplied = ["attachment": attachment != nil, "file": file != nil, "to": to != nil, "size": size != nil]
         for name in Self.requiredOptionsForActions[action] ?? [] where supplied[name] != true { throw ValidationError("--\(name) is required") }
         if action == .export { try validateExportDestination() }
+        let attachedFile = try action == .add || action == .replace ? file.map(readableFilePath) : nil
         let store = try note.open(readOnly: action == .ls || action == .export)
         if action == .ls {
             let data = try store.readNote(note.id)
@@ -182,10 +183,7 @@ struct Attachments: ParsableCommand {
             guard let attachment else { throw ValidationError("--attachment is required") }
             options["attachment"] = attachment
         }
-        if action == .add || action == .replace {
-            guard let file else { throw ValidationError("--file is required") }
-            options["file"] = URL(fileURLWithPath: file).standardizedFileURL.path
-        }
+        if let attachedFile { options["file"] = attachedFile }
         if action == .mv {
             guard let to else { throw ValidationError("--to is required") }
             options["target"] = to

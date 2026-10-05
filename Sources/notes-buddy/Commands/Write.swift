@@ -168,12 +168,9 @@ struct Attach: ParsableCommand {
     @Argument(help: "Path of the file to attach") var file: String
 
     func run() throws {
-        let url = URL(fileURLWithPath: file).standardizedFileURL
-        guard FileManager.default.isReadableFile(atPath: url.path) else {
-            throw NotesError(description: "file not readable: \(url.path)")
-        }
+        let path = try readableFilePath(file)
         _ = try openLocalNotes(readOnly: false)
-            .editNote(id, operation: "attachment-add", options: ["file": url.path])
-        try output.writeAction("attach", noteActionData(id: id, fields: ["file": url.path, "attached": true]))
+            .editNote(id, operation: "attachment-add", options: ["file": path])
+        try output.writeAction("attach", noteActionData(id: id, fields: ["file": path, "attached": true]))
     }
 }

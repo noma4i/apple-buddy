@@ -174,10 +174,23 @@ final class OutputTests: XCTestCase {
         XCTAssertTrue(failure.error.contains("Error:"), failure.error)
     }
 
-    private func run(_ arguments: [String]) throws -> (code: Int32, output: String, error: String) {
+    func testAttachmentFileIsCheckedBeforeNotesIsOpened() throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: home) }
+        let missing = home.appendingPathComponent("missing.pdf").path
+        for arguments in [["attachments", "add", "12345678", "--file", missing], ["attachments", "replace", "12345678", "--attachment", "12345678", "--file", missing]] {
+            let result = try run(arguments, home: home)
+            XCTAssertEqual(result.code, 1, result.error)
+            XCTAssertTrue(result.error.contains("file not readable: \(missing)"), result.error)
+        }
+    }
+
+    private func run(_ arguments: [String], home: URL? = nil) throws -> (code: Int32, output: String, error: String) {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: ".build/debug/nb")
         process.arguments = arguments
+        if let home { process.environment = ProcessInfo.processInfo.environment.merging(["CFFIXED_USER_HOME": home.path]) { $1 } }
         let output = Pipe()
         let error = Pipe()
         process.standardOutput = output

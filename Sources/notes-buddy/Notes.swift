@@ -99,6 +99,12 @@ func setNoteBody(id: String, html: String) throws {
     try openLocalNotes(readOnly: false).setHTML(html, forNote: id)
 }
 
+func readableFilePath(_ file: String) throws -> String {
+    let path = URL(fileURLWithPath: file).standardizedFileURL.path
+    guard FileManager.default.isReadableFile(atPath: path) else { throw NotesError(description: "file not readable: \(path)") }
+    return path
+}
+
 func readHTML(from path: String?) throws -> String {
     guard let path else { return "" }
     let data = path == "-" ? FileHandle.standardInput.readDataToEndOfFile() : try Data(contentsOf: URL(fileURLWithPath: path))
