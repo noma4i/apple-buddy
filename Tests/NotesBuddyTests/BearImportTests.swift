@@ -45,6 +45,23 @@ final class BearImportTests: XCTestCase {
         XCTAssertTrue(message.contains("Bear tags are not valid Notes tags: dev/c++, my tag"), message)
     }
 
+    func testImportVerificationComparesFileDigests() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let source = directory.appendingPathComponent("source.bin"), copy = directory.appendingPathComponent("copy.bin"), other = directory.appendingPathComponent("other.bin")
+        try Data([1, 2, 3]).write(to: source)
+        try Data([1, 2, 3]).write(to: copy)
+        try Data([1, 2, 4]).write(to: other)
+        let note = BearNote(key: "1", identifier: "source", title: "File", text: "File", files: [source.path])
+        let digests = [source.path: try fileDigest(source.path)]
+        func state(_ file: URL) -> [AnyHashable: Any] { ["text": "File", "attachments": [["type": "public.data", "path": file.path]], "tags": [], "folderPath": "Untagged"] }
+        XCTAssertEqual(try verifyBearNote(note, state: state(copy), digests: digests), 1)
+        XCTAssertThrowsError(try verifyBearNote(note, state: state(other), digests: digests))
+        try Data([9]).write(to: source)
+        XCTAssertThrowsError(try verifyBearNote(note, state: state(copy), digests: digests))
+    }
+
     func testMarkdownSeparatorsAreContentNotYAML() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
