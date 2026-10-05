@@ -216,7 +216,7 @@ Earlier notes can remain saved if a later import fails. Keep stderr and the JSON
 
 ## Output and safety
 
-Every command accepts `--json` for data. Help and errors always remain text.
+Every command except `mcp` accepts `--json` for data. Help and errors always remain text.
 `nb version` and `nb --version` print the release version. `nb version --json` returns its name and version.
 Invalid commands return a nonzero exit code and a help hint. Synchronization failures do not hide saved local changes.
 

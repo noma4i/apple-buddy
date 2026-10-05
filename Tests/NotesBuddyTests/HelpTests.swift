@@ -1,5 +1,7 @@
+import ArgumentParser
 import Foundation
 import XCTest
+@testable import notes_buddy
 
 final class HelpTests: XCTestCase {
     func testVersionCommandsReturnTheReleaseVersion() throws {
@@ -127,8 +129,12 @@ final class HelpTests: XCTestCase {
         }
     }
 
+    private func commandPaths(_ command: ParsableCommand.Type = NotesBuddy.self, prefix: [String] = []) -> [[String]] {
+        [prefix] + command.configuration.subcommands.flatMap { commandPaths($0, prefix: prefix + [$0._commandName]) }
+    }
+
     func testBareHelpWorksImmediatelyAfterEveryCommand() throws {
-        let commands = ["", "folders", "mkfolder", "rmfolder", "ls", "show", "search", "new", "rm", "mv", "append", "replace", "attach", "inspect", "edit", "insert", "format", "tags", "links", "attachments", "snapshot-db", "import-bear", "sync", "table", "table ls", "table new", "table set", "table add-row", "table rm-row", "table add-col", "table rm-col"]
+        let commands = commandPaths().map { $0.joined(separator: " ") }
         for command in commands {
             let words = command.split(separator: " ").map(String.init)
             let arguments = words + ["help"]
@@ -213,7 +219,7 @@ final class HelpTests: XCTestCase {
     }
 
     func testEveryCommandHasItsOwnUsageHelp() throws {
-        let commands = ["", "folders", "mkfolder", "rmfolder", "ls", "show", "search", "new", "rm", "mv", "append", "replace", "attach", "inspect", "edit", "insert", "format", "tags", "links", "attachments", "snapshot-db", "import-bear", "sync", "table", "table ls", "table new", "table set", "table add-row", "table rm-row", "table add-col", "table rm-col"]
+        let commands = commandPaths().map { $0.joined(separator: " ") }
         for command in commands {
             let process = Process()
             process.executableURL = URL(fileURLWithPath: ".build/debug/nb")
@@ -226,7 +232,7 @@ final class HelpTests: XCTestCase {
             process.waitUntilExit()
             XCTAssertEqual(process.terminationStatus, 0, "\(command): \(output)")
             XCTAssertFalse(output.contains("--quit-notes"), "\(command): automatic quit must not require a flag")
-            XCTAssertTrue(output.contains("--json"), "\(command): JSON output must be available")
+            if command != "mcp" { XCTAssertTrue(output.contains("--json"), "\(command): JSON output must be available") }
             XCTAssertTrue(output.contains("USAGE: nb" + (command.isEmpty ? "" : " " + command)), "\(command): \(output)")
         }
     }
