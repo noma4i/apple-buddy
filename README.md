@@ -153,7 +153,10 @@ nb folders --json
 ```
 
 Folder data includes its UUID, path, active notes, deleted notes, direct subfolders and `empty`.
-`stats --folder` includes descendants. Its totals sum those folders without counting a note twice.
+`--folder` in `stats`, `ls` and `search` includes subfolders. Counts of 1 folder are direct.
+`stats` totals sum the listed folders without counting a note twice. In JSON they are `totalNoteCount` and `totalDeletedNoteCount`.
+`ls`, `search` and `stats` read the same set of notes. Notes that iCloud has not downloaded yet are left out.
+Deleted notes are listed only by `nb ls --folder "Recently Deleted"`.
 A folder is empty only when it has no notes, deleted notes or subfolders.
 
 ## Search
@@ -161,6 +164,7 @@ A folder is empty only when it has no notes, deleted notes or subfolders.
 Partial words, phrases, fuzzy matching, PDF text and image OCR work by default.
 Search ignores case, accents and whitespace differences. Exact matches rank before fuzzy matches.
 Numbers, IDs and punctuation stay literal. Deleted notes are excluded.
+Locked notes are listed by `ls` but not searched. `search` prints their number to stderr and returns it as `skippedProtected`.
 
 ```sh
 nb search "wekend" --field title
@@ -170,14 +174,18 @@ nb search "budget" --folder Work --limit 20 --offset 20
 nb ls --tag invoices
 ```
 
-`--field` accepts `all` (default), `id`, `title`, `text`, `tag`, `link`, `attachment` or `document`.
+`--field` accepts `all` (default), `id`, `title`, `text`, `tag`, `link`, `url`, `attachment` or `document`.
+`link` finds links between notes, `url` finds web addresses. `id` matches exactly. `ls --tag` matches the exact tag, `--field tag` is fuzzy.
 Text search includes table cells. Attachment search finds filenames. Document search reads PDFs and images locally.
 Up to 4 files are indexed in parallel. Later searches reuse extracted text until a file changes.
 The private index lives in `~/Library/Caches/notes-buddy/documents-v1`. Search never launches Notes or changes its database.
 JSON includes `scannedDocuments`, `cachedDocuments` and document errors. Images of 2 pixels or less have no searchable text.
 Missing files and extraction errors are reported. OCR does not modify Notes.
 Malformed PDFs can produce a macOS decoding warning during first indexing.
-JSON search and lists include attachment metadata. `folder` always contains a folder UUID, while `folderPath` contains its readable path.
+`ls --json`, `search --json`, `show --json` and `inspect --json` describe a note with the same fields:
+`id`, `url`, `title`, `folder`, `folderPath`, `modified`, `pinned`, `protected`, `tags`, `attachments` and `urls`.
+`folder` contains a folder UUID, `folderPath` its readable path. A field without a value is omitted.
+`table ls --json` returns `{id, tables}` with the table number for `--table`.
 
 ## Files, tags and links
 
@@ -197,8 +205,8 @@ Tags are native objects. Slashes, commas and whitespace split names into separat
 Links are one-way. Add a reverse link for a bidirectional relationship.
 Use `links add` with your source note ID and `--to` followed by the target note ID.
 For exporting 1 file, get its UUID from `show --json` or `attachments ls`, then read `attachments export help`.
-Attachment metadata includes `id`, owning `note`, `type`, `name`, `available` and `exportable`.
-Locally stored files also include `path` and a `file://` URL. Native tables have no exportable file and appear in `tables`.
+Attachment metadata includes `id`, owning `note`, `type` and `kind`. Files (`kind: file`) add `name`, `available` and `exportable`.
+Locally stored files also include `path` and a `file://` URL. Native tables (`kind: table`) are not exported and appear in `tables`.
 Web links appear in `urls`, with their label and address. Links between notes appear in `links`.
 A link to a PDF website is not a file attachment. Export does not download web links.
 

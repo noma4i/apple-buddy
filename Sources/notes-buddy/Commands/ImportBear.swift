@@ -213,13 +213,7 @@ struct ImportBear: ParsableCommand {
         var moved = 0
         var identifiers: [String: String] = [:]
         for path in Set(notes.flatMap(\.tags) + notes.map(\.destination)).sorted() { _ = try destination(path) }
-        var existingImports: [String: String] = [:]
-        for folder in folders {
-            guard let folderID = folder["id"] as? String else { continue }
-            for note in try store.listNotes(inFolder: folderID) {
-                if note["hasDocument"] as? Bool == true, let identifier = note["identifier"] as? String, let id = note["id"] as? String { existingImports[identifier] = id }
-            }
-        }
+        let existingImports = try store.finishedImports(notes.map(\.notesIdentifier))
         for note in notes {
             try autoreleasepool {
                 let result: [AnyHashable: Any]

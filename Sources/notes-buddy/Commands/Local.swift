@@ -204,11 +204,12 @@ struct Attachments: ParsableCommand {
 
     func exportFiles(_ items: [[String: Any]]) throws -> [[String: String]] {
         try validateExportDestination()
-        let selected = items.filter { attachment == nil ? $0["type"] as? String != "com.apple.notes.table" : $0["id"] as? String == attachment }
+        let selected = items.filter { attachment == nil ? $0["kind"] as? String != "table" : $0["id"] as? String == attachment }
         guard attachment == nil || selected.count == 1 else { throw NotesError(description: "attachment not found in this note") }
         var copies: [(URL, URL, String)] = []
         var names = Set<String>()
         for item in selected {
+            guard item["kind"] as? String != "table" else { throw NotesError(description: "native tables are not exported, read them with nb table ls") }
             guard let id = item["id"] as? String, let path = item["path"] as? String, item["available"] as? Bool == true else {
                 throw NotesError(description: "attachment file is not available locally")
             }
@@ -294,13 +295,16 @@ struct Links: ParsableCommand {
 
 struct Search: ParsableCommand {
     @OptionGroup var output: OutputOptions
-    enum Field: String, ExpressibleByArgument { case all, id, title, text, attachment, tag, link, document }
+    enum Field: String, ExpressibleByArgument { case all, id, title, text, attachment, tag, link, url, document }
     static let configuration = CommandConfiguration(abstract: "Find notes by text, title, id, table cells, tags, links or attachment filename", discussion: """
         Prints only note UUIDs, one per line. No matches produce no stdout.
         Fuzzy matching is enabled by default. Exact matches rank first.
         all searches document contents automatically, including PDF text and image text.
         Changed documents are indexed in parallel. Later searches reuse the local index.
-        Add --json for titles, excerpts and match details. Locked and deleted notes are excluded.
+        Add --json for titles, excerpts and match details. Deleted notes are excluded.
+        Locked notes are not searched, their number goes to stderr and skippedProtected.
+        id matches exactly. tag, link and url search native tags, note links and web addresses.
+        Without --limit prints the first 50 results. JSON total has the full count.
 
         EXAMPLES
           nb search invoice
@@ -308,8 +312,8 @@ struct Search: ParsableCommand {
           nb search project --field tag --json
         """)
     @Argument(help: "Nonempty text or id fragment to find") var query: String
-    @Option(help: "all, id, title, text, attachment, tag, link or document") var field: Field = .all
-    @Option(help: ArgumentHelp("Only notes of this folder, by \(ReferenceHelp.folder)")) var folder: String?
+    @Option(help: "all, id, title, text, attachment, tag, link, url or document") var field: Field = .all
+    @Option(help: ArgumentHelp("Only notes of this folder and its subfolders, by \(ReferenceHelp.folder)")) var folder: String?
     @Option(help: "Maximum number of results") var limit = 50
     @Option(help: "Skip this many results") var offset = 0
 
@@ -332,5 +336,6 @@ struct Search: ParsableCommand {
         try output.write(result, text: ids.joined(separator: "\n"))
         guard let total = result["total"] as? Int else { throw NotesError(description: "Notes returned invalid search count") }
         output.summary("\(ids.count) of \(total) notes")
+        if let skipped = result["skippedProtected"] as? Int, skipped > 0 { output.summary("\(skipped) locked notes not searched") }
     }
 }

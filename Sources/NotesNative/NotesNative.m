@@ -287,12 +287,7 @@ static void NBRequire(BOOL valid, NSString *message) {
         if (existing.count) {
             NSManagedObject *note = existing.firstObject;
             NBRequire(![[note valueForKey:@"isDeletedOrInTrash"] boolValue], @"Imported note was deleted, refusing to recreate it");
-            BOOL onlyTables = YES;
-            for (NSManagedObject *attachment in [note visibleTopLevelAttachments]) {
-                if (![[attachment valueForKey:@"typeUTI"] isEqualToString:@"com.apple.notes.table"]) onlyTables = NO;
-            }
-            BOOL reserved = ![self isProtectedOrShared:note] && ![[note valueForKey:@"noteData"] valueForKey:@"data"] && ![[[[note mergeableString] attributedString] string] length] && onlyTables && ![note visibleInlineAttachments].count && ![[note valueForKey:@"isInCloud"] boolValue];
-            if (!reserved) return @{@"id":note.objectID.URIRepresentation.absoluteString, @"imported":@NO};
+            if (![self isUnfinishedImport:note]) return @{@"id":note.objectID.URIRepresentation.absoluteString, @"imported":@NO};
             NBRequire([[note valueForKey:@"folder"] isEqual:[self folder:folder]], @"Incomplete import belongs to another folder");
             [_context deleteObject:note];
         }
@@ -317,6 +312,27 @@ static void NBRequire(BOOL valid, NSString *message) {
         if (![self commitChanges:error]) return nil;
         return @{@"id":note.objectID.URIRepresentation.absoluteString, @"imported":@YES};
     } @catch (NSException *exception) { [_context rollback]; if (error) *error = NBError(exception.reason); return nil; }
+}
+
+- (BOOL)isUnfinishedImport:(NSManagedObject *)note {
+    for (NSManagedObject *attachment in [note visibleTopLevelAttachments]) {
+        if (![[attachment valueForKey:@"typeUTI"] isEqualToString:@"com.apple.notes.table"]) return NO;
+    }
+    return ![self isProtectedOrShared:note] && ![[note valueForKey:@"noteData"] valueForKey:@"data"] && ![[[[note mergeableString] attributedString] string] length] && ![note visibleInlineAttachments].count && ![[note valueForKey:@"isInCloud"] boolValue];
+}
+
+- (NSDictionary<NSString *, NSString *> *)finishedImports:(NSArray<NSString *> *)identifiers error:(NSError **)error {
+    @try {
+        NSFetchRequest *request = [NSFetchRequest fetchRequestWithEntityName:@"ICNote"];
+        request.predicate = [NSPredicate predicateWithFormat:@"identifier IN %@", identifiers];
+        NSArray *notes = [_context executeFetchRequest:request error:error];
+        if (!notes) return nil;
+        NSMutableDictionary *result = [NSMutableDictionary dictionary];
+        for (NSManagedObject *note in notes) {
+            if ([self isStoredNote:note] && ![[note valueForKey:@"isDeletedOrInTrash"] boolValue] && ![self isUnfinishedImport:note]) result[[note valueForKey:@"identifier"]] = note.objectID.URIRepresentation.absoluteString;
+        }
+        return result;
+    } @catch (NSException *exception) { if (error) *error = NBError(exception.reason); return nil; }
 }
 
 - (BOOL)commitChanges:(NSError **)error {
@@ -481,7 +497,7 @@ static void NBRequire(BOOL valid, NSString *message) {
         NSMutableDictionary *children = [NSMutableDictionary dictionary];
         for (NSManagedObject *note in notes) {
             NSManagedObject *folder = [note valueForKey:@"folder"];
-            if (!folder) continue;
+            if (!folder || ![self isStoredNote:note]) continue;
             NSString *key = folder.objectID.URIRepresentation.absoluteString;
             NSMutableDictionary *values = [[note valueForKey:@"isDeletedOrInTrash"] boolValue] ? deletedCounts : counts;
             values[key] = @([values[key] unsignedIntegerValue] + 1);
@@ -508,18 +524,81 @@ static void NBRequire(BOOL valid, NSString *message) {
     } @catch (NSException *exception) { if (error) *error = NBError(exception.reason); return nil; }
 }
 
-- (NSArray<NSDictionary *> *)listNotesInFolder:(NSString *)reference error:(NSError **)error {
-    @try {
-        NSManagedObject *folder = [self folder:reference];
-        NSFetchRequest *request = [NSFetchRequest fetchRequestWithEntityName:@"ICNote"];
-        request.predicate = [NSPredicate predicateWithFormat:@"folder == %@", folder];
-        NSArray *notes = [_context executeFetchRequest:request error:error];
-        if (!notes) return nil;
-        NSMutableArray *result = [NSMutableArray array];
-        for (NSManagedObject *note in notes) {
-            if ([[note valueForKey:@"isDeletedOrInTrash"] boolValue]) continue;
-            [result addObject:@{@"id":note.objectID.URIRepresentation.absoluteString, @"url":[self noteURL:note].absoluteString, @"identifier":[note valueForKey:@"identifier"], @"hasDocument":@((BOOL)([[note valueForKey:@"noteData"] valueForKey:@"data"] != nil)), @"title":[note valueForKey:@"title"] ?: @"", @"folder":folder.objectID.URIRepresentation.absoluteString, @"folderPath":[self folderPath:folder], @"modified":[note valueForKey:@"modificationDate"] ?: [NSDate distantPast], @"attachments":[self attachmentDetailsForNote:note], @"urls":[[note valueForKey:@"isPasswordProtected"] boolValue] ? NSNull.null : [self urlDetailsForNote:note]}];
+- (BOOL)isStoredNote:(NSManagedObject *)note {
+    return ![[note valueForKey:@"markedForDeletion"] boolValue] && ![[note valueForKey:@"needsInitialFetchFromCloud"] boolValue];
+}
+
+- (NSArray<NSManagedObject *> *)notesForReadingInFolder:(NSString *)reference tag:(NSString *)tag {
+    NSManagedObject *root = reference ? [self folder:reference] : nil;
+    BOOL deleted = [[root valueForKey:@"isTrashFolder"] boolValue];
+    NSSet *tagged = nil;
+    if (tag) {
+        NSArray<NSString *> *names = [self tagNames:tag];
+        NBRequire(names.count == 1, @"Use 1 tag name");
+        NSString *canonical = [NSClassFromString(@"ICHashtag") standardizedHashtagRepresentationForDisplayText:names.firstObject];
+        NSMutableSet *found = [NSMutableSet set];
+        for (NSManagedObjectID *objectID in [NSClassFromString(@"ICNote") notesContainingHashtagWithStandarizedContent:canonical context:_context]) [found addObject:objectID];
+        tagged = found;
+    }
+    NSFetchRequest *request = [NSFetchRequest fetchRequestWithEntityName:@"ICNote"];
+    request.sortDescriptors = @[[NSSortDescriptor sortDescriptorWithKey:@"modificationDate" ascending:NO], [NSSortDescriptor sortDescriptorWithKey:@"identifier" ascending:YES]];
+    NSError *error = nil;
+    NSArray *notes = [_context executeFetchRequest:request error:&error];
+    NBRequire(notes != nil, error.localizedDescription);
+    NSMutableArray *result = [NSMutableArray array];
+    for (NSManagedObject *note in notes) {
+        if (![self isStoredNote:note] || [[note valueForKey:@"isDeletedOrInTrash"] boolValue] != deleted) continue;
+        if (tagged && ![tagged containsObject:note.objectID]) continue;
+        if (root) {
+            BOOL inside = NO;
+            NSUInteger depth = 0;
+            for (NSManagedObject *folder = [note valueForKey:@"folder"]; folder && !inside && depth < 64; folder = [folder parentFolder], depth++) inside = [folder isEqual:root];
+            if (!inside) continue;
         }
+        [result addObject:note];
+    }
+    return result;
+}
+
+- (NSArray *)tagDetailsForNote:(NSManagedObject *)note {
+    NSMutableArray *tags = [NSMutableArray array];
+    for (NSManagedObject *attachment in [note visibleInlineAttachments]) {
+        if (![[attachment valueForKey:@"isHashtagAttachment"] boolValue]) continue;
+        [tags addObject:@{
+            @"id":attachment.objectID.URIRepresentation.absoluteString,
+            @"name":[attachment valueForKey:@"displayText"] ?: @"",
+            @"contentIdentifier":[attachment valueForKey:@"tokenContentIdentifier"] ?: @""
+        }];
+    }
+    return tags;
+}
+
+- (NSMutableDictionary *)summarizeNote:(NSManagedObject *)note {
+    NSManagedObject *folder = [note valueForKey:@"folder"];
+    BOOL locked = [[note valueForKey:@"isPasswordProtected"] boolValue];
+    NSMutableDictionary *summary = [@{
+        @"id":note.objectID.URIRepresentation.absoluteString,
+        @"url":[self noteURL:note].absoluteString,
+        @"title":[note valueForKey:@"title"] ?: @"",
+        @"pinned":@([[note valueForKey:@"isPinned"] boolValue]),
+        @"protected":@(locked),
+        @"attachments":[self attachmentDetailsForNote:note],
+        @"tags":[self tagDetailsForNote:note]
+    } mutableCopy];
+    NSDate *modified = [note valueForKey:@"modificationDate"];
+    if (modified) summary[@"modified"] = [[[NSISO8601DateFormatter alloc] init] stringFromDate:modified];
+    if (folder) {
+        summary[@"folder"] = folder.objectID.URIRepresentation.absoluteString;
+        summary[@"folderPath"] = [self folderPath:folder];
+    }
+    if (!locked) summary[@"urls"] = [self urlDetailsForNote:note];
+    return summary;
+}
+
+- (NSArray<NSDictionary *> *)listNotes:(NSDictionary *)options error:(NSError **)error {
+    @try {
+        NSMutableArray *result = [NSMutableArray array];
+        for (NSManagedObject *note in [self notesForReadingInFolder:options[@"folder"] tag:options[@"tag"]]) [result addObject:[self summarizeNote:note]];
         return result;
     } @catch (NSException *exception) { if (error) *error = NBError(exception.reason); return nil; }
 }
@@ -556,9 +635,7 @@ static void NBRequire(BOOL valid, NSString *message) {
         [self requireWritable];
         NSManagedObject *folder = [self folder:reference];
         NBRequire(![[folder valueForKey:@"isSystemFolder"] boolValue] && ![[folder valueForKey:@"isSharedViaICloud"] boolValue], @"System and shared folders cannot be removed");
-        NSArray *notes = [self listNotesInFolder:reference error:error];
-        if (!notes) return NO;
-        NBRequire(notes.count == 0, @"Folder has notes, move or remove them first");
+        NBRequire([self notesForReadingInFolder:reference tag:nil].count == 0, @"Folder has notes, move or remove them first");
         for (NSManagedObject *other in [NSClassFromString(@"ICFolder") visibleFoldersInContext:_context]) NBRequire(![[other parentFolder] isEqual:folder], @"Folder has subfolders, remove them first");
         [NSClassFromString(@"ICFolder") deleteFolder:folder];
         return [self commitChanges:error];
@@ -783,16 +860,18 @@ static void NBRequire(BOOL valid, NSString *message) {
 - (NSDictionary *)attachmentDetails:(NSManagedObject *)attachment note:(NSManagedObject *)note {
     NSURL *file = [attachment fileURL];
     BOOL available = file && [file checkResourceIsReachableAndReturnError:nil];
+    BOOL table = [[attachment valueForKey:@"isTable"] boolValue];
     NSMutableDictionary *item = [@{
         @"id":attachment.objectID.URIRepresentation.absoluteString,
-        @"identifier":[attachment valueForKey:@"identifier"],
         @"note":note.objectID.URIRepresentation.absoluteString,
         @"type":[attachment valueForKey:@"typeUTI"] ?: @"",
-        @"name":file.lastPathComponent ?: @"",
-        @"available":@(available),
-        @"exportable":@((BOOL)(available && ![[attachment valueForKey:@"isTable"] boolValue] && ![[note valueForKey:@"isPasswordProtected"] boolValue])),
+        @"kind":table ? @"table" : @"file",
         @"viewSize":[attachment valueForKey:@"preferredViewSize"]
     } mutableCopy];
+    if (table) return item;
+    item[@"name"] = file.lastPathComponent ?: @"";
+    item[@"available"] = @(available);
+    item[@"exportable"] = @((BOOL)(available && ![[note valueForKey:@"isPasswordProtected"] boolValue]));
     if (file) {
         item[@"path"] = file.path;
         item[@"url"] = file.absoluteString;
@@ -866,28 +945,17 @@ static void NBRequire(BOOL valid, NSString *message) {
 }
 
 - (NSDictionary *)describeNote:(NSManagedObject *)note {
-    NSManagedObject *noteFolder = [note valueForKey:@"folder"];
-    NSMutableArray *attachments = [NSMutableArray array];
     NSMutableArray *tables = [NSMutableArray array];
     BOOL hasNonTableAttachment = NO;
     for (NSManagedObject *attachment in [self attachmentsInNote:note]) {
-        [attachments addObject:[self attachmentDetails:attachment note:note]];
         if ([[attachment valueForKey:@"isTable"] boolValue]) {
             [tables addObject:[self tableRowsForAttachment:attachment]];
         } else {
             hasNonTableAttachment = YES;
         }
     }
-    NSMutableArray *tags = [NSMutableArray array];
     NSMutableArray *links = [NSMutableArray array];
     for (NSManagedObject *attachment in [note visibleInlineAttachments]) {
-        if ([[attachment valueForKey:@"isHashtagAttachment"] boolValue]) {
-            [tags addObject:@{
-                @"id":attachment.objectID.URIRepresentation.absoluteString,
-                @"name":[attachment valueForKey:@"displayText"] ?: @"",
-                @"contentIdentifier":[attachment valueForKey:@"tokenContentIdentifier"] ?: @""
-            }];
-        }
         if ([[attachment valueForKey:@"isLinkAttachment"] boolValue]) {
             NSManagedObject *target = [attachment valueForKey:@"linkedNote"];
             NSMutableDictionary *link = [@{
@@ -914,25 +982,18 @@ static void NBRequire(BOOL valid, NSString *message) {
         }
         [runs addObject:run];
     }];
-    return @{
-        @"id":note.objectID.URIRepresentation.absoluteString,
-        @"url":[self noteURL:note].absoluteString,
-        @"title":[note valueForKey:@"title"] ?: @"",
-        @"folder":noteFolder.objectID.URIRepresentation.absoluteString ?: @"",
-        @"folderPath":[self folderPath:noteFolder],
-        @"pinned":@([[note valueForKey:@"isPinned"] boolValue]),
+    NSMutableDictionary *result = [self summarizeNote:note];
+    [result addEntriesFromDictionary:@{
         @"needsCloudPush":[note valueForKey:@"needsToBePushedToCloud"],
         @"inCloud":[note valueForKey:@"isInCloud"],
         @"cloudAcknowledged":@((BOOL)([[note valueForKey:@"isInCloud"] boolValue] && [[note valueForKey:@"hasSuccessfullyPushedLatestVersionToCloud"] boolValue])),
         @"canRewriteHTML":@((BOOL)(!hasNonTableAttachment && ![note visibleInlineAttachments].count && ![[note valueForKey:@"hasChecklist"] boolValue] && ![[note valueForKey:@"isSharedViaICloud"] boolValue] && ![[note valueForKey:@"isDeletedOrInTrash"] boolValue])),
         @"text":text.string ?: @"",
-        @"attachments":attachments,
-        @"tags":tags,
         @"links":links,
-        @"urls":[self urlDetailsForNote:note],
         @"runs":runs,
         @"tables":tables
-    };
+    }];
+    return result;
 }
 
 - (NSArray<NSValue *> *)rangesForText:(NSString *)find inString:(NSString *)text all:(BOOL)all {
@@ -1157,15 +1218,8 @@ static void NBRequire(BOOL valid, NSString *message) {
 
 - (NSArray<NSString *> *)noteIDsWithTag:(NSString *)tag error:(NSError **)error {
     @try {
-        NSArray<NSString *> *names = [self tagNames:tag];
-        NBRequire(names.count == 1, @"Use 1 tag name");
-        NSString *canonical = [NSClassFromString(@"ICHashtag") standardizedHashtagRepresentationForDisplayText:names.firstObject];
         NSMutableArray *ids = [NSMutableArray array];
-        for (NSManagedObjectID *objectID in [NSClassFromString(@"ICNote") notesContainingHashtagWithStandarizedContent:canonical context:_context]) {
-            NSManagedObject *note = [_context existingObjectWithID:objectID error:error];
-            if (!note) return nil;
-            if (![[note valueForKey:@"isDeletedOrInTrash"] boolValue]) [ids addObject:note.objectID.URIRepresentation.absoluteString];
-        }
+        for (NSManagedObject *note in [self notesForReadingInFolder:nil tag:tag]) [ids addObject:note.objectID.URIRepresentation.absoluteString];
         return ids;
     } @catch (NSException *exception) {
         if (error) *error = NBError(exception.reason);
@@ -1180,7 +1234,7 @@ static void NBRequire(BOOL valid, NSString *message) {
         NSInteger limit = options[@"limit"] ? [options[@"limit"] integerValue] : 50;
         NSInteger offset = [options[@"offset"] integerValue];
         NBRequire([query stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet].length, @"Search query must not be empty");
-        NBRequire([@[@"all", @"id", @"title", @"text", @"attachment", @"tag", @"link", @"document"] containsObject:field], @"Unknown search field");
+        NBRequire([@[@"all", @"id", @"title", @"text", @"attachment", @"tag", @"link", @"url", @"document"] containsObject:field], @"Unknown search field");
         NBRequire(limit > 0 && offset >= 0, @"Limit must be positive and offset nonnegative");
         query = NBSearchText(query);
         if ([query hasPrefix:@"x-coredata://"]) {
@@ -1190,11 +1244,7 @@ static void NBRequire(BOOL valid, NSString *message) {
         }
         NSRegularExpression *approximate = [NSRegularExpression regularExpressionWithPattern:NBSearchPattern(query) options:NSRegularExpressionCaseInsensitive error:error];
         if (!approximate) return nil;
-        NSManagedObject *selectedFolder = options[@"folder"] ? [self folder:options[@"folder"]] : nil;
-        NSFetchRequest *request = [NSFetchRequest fetchRequestWithEntityName:@"ICNote"];
-        request.sortDescriptors = @[[NSSortDescriptor sortDescriptorWithKey:@"modificationDate" ascending:NO], [NSSortDescriptor sortDescriptorWithKey:@"identifier" ascending:YES]];
-        NSArray *notes = [_context executeFetchRequest:request error:error];
-        if (!notes) return nil;
+        NSArray *notes = [self notesForReadingInFolder:options[@"folder"] tag:nil];
         NSMutableArray *records = [NSMutableArray array];
         NSMutableOrderedSet<NSURL *> *files = [NSMutableOrderedSet orderedSet];
         NSUInteger protectedCount = 0;
@@ -1203,8 +1253,6 @@ static void NBRequire(BOOL valid, NSString *message) {
         NSUInteger cachedDocuments = 0;
         NSMutableArray *documentErrors = [NSMutableArray array];
         for (NSManagedObject *note in notes) {
-            if ([[note valueForKey:@"isDeletedOrInTrash"] boolValue]) continue;
-            if (selectedFolder && ![[note valueForKey:@"folder"] isEqual:selectedFolder]) continue;
             if ([[note valueForKey:@"isPasswordProtected"] boolValue]) { protectedCount++; continue; }
             NSString *identifier = note.objectID.URIRepresentation.absoluteString;
             readingIdentifier = [note valueForKey:@"identifier"];
@@ -1228,15 +1276,16 @@ static void NBRequire(BOOL valid, NSString *message) {
                     for (NSManagedObject *attachment in attachments) [names addObject:[attachment fileURL].lastPathComponent ?: @""];
                     values[@"attachment"] = [names componentsJoinedByString:@"\n"];
                 }
-                if (all || [@[@"tag", @"link"] containsObject:field]) {
-                    NSMutableArray *tags = [NSMutableArray array], *links = [NSMutableArray array];
+                if (all || [@[@"tag", @"link", @"url"] containsObject:field]) {
+                    NSMutableArray *tags = [NSMutableArray array], *links = [NSMutableArray array], *urls = [NSMutableArray array];
                     for (NSManagedObject *attachment in [note visibleInlineAttachments]) {
                         if ([[attachment valueForKey:@"isHashtagAttachment"] boolValue]) [tags addObject:[attachment valueForKey:@"displayText"] ?: @""];
                         if ([[attachment valueForKey:@"isLinkAttachment"] boolValue]) [links addObject:[attachment valueForKey:@"displayText"] ?: @""];
                     }
-                    for (NSDictionary *url in [self urlDetailsForNote:note]) { [links addObject:url[@"name"]]; [links addObject:url[@"url"]]; }
+                    for (NSDictionary *url in [self urlDetailsForNote:note]) { [urls addObject:url[@"name"]]; [urls addObject:url[@"url"]]; }
                     values[@"tag"] = [tags componentsJoinedByString:@"\n"];
                     values[@"link"] = [links componentsJoinedByString:@"\n"];
+                    values[@"url"] = [urls componentsJoinedByString:@"\n"];
                 }
                 if (all || [field isEqualToString:@"document"]) {
                     for (NSManagedObject *attachment in attachments) {
@@ -1282,7 +1331,7 @@ static void NBRequire(BOOL valid, NSString *message) {
             NSMutableArray *fields = [NSMutableArray array];
             NSString *excerpt = @"";
             NSInteger bestMatch = 2;
-            for (NSString *key in @[@"title", @"text", @"attachment", @"tag", @"link", @"document", @"id"]) {
+            for (NSString *key in @[@"title", @"text", @"attachment", @"tag", @"link", @"url", @"document", @"id"]) {
                 if (![field isEqualToString:@"all"] && ![field isEqualToString:key]) continue;
                 NSString *value = values[key];
                 if (!value) continue;
@@ -1308,9 +1357,9 @@ static void NBRequire(BOOL valid, NSString *message) {
         NSUInteger start = MIN((NSUInteger)offset, matches.count);
         NSArray *page = [matches subarrayWithRange:NSMakeRange(start, MIN((NSUInteger)limit, matches.count - start))];
         for (NSMutableDictionary *item in page) {
-            NSManagedObject *note = item[@"note"], *folder = [note valueForKey:@"folder"];
+            NSManagedObject *note = item[@"note"];
             [item removeObjectForKey:@"note"];
-            [item addEntriesFromDictionary:@{@"url":[self noteURL:note].absoluteString, @"title":[note valueForKey:@"title"] ?: @"", @"folder":folder.objectID.URIRepresentation.absoluteString ?: @"", @"folderPath":[self folderPath:folder], @"attachments":[self attachmentDetailsForNote:note], @"urls":[self urlDetailsForNote:note]}];
+            [item addEntriesFromDictionary:[self summarizeNote:note]];
         }
         return @{@"notes":page, @"total":@(matches.count), @"offset":@(offset), @"limit":@(limit), @"skippedProtected":@(protectedCount), @"unavailableDocuments":@(unavailableDocuments), @"scannedDocuments":@(scannedDocuments), @"cachedDocuments":@(cachedDocuments), @"documentErrors":documentErrors};
     } @catch (NSException *exception) {

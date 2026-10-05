@@ -72,7 +72,7 @@ final class OutputTests: XCTestCase {
         let items: [[String: Any]] = [
             ["id": "one", "path": first.path, "available": true],
             ["id": "two", "path": second.path, "available": true],
-            ["id": "table", "type": "com.apple.notes.table", "available": false]
+            ["id": "table", "type": "com.apple.notes.table", "kind": "table"]
         ]
         let output = directory.appendingPathComponent("saved")
         let command = try Attachments.parse(["export", "fixture", "--directory", output.path])

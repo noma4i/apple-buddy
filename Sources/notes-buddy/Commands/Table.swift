@@ -37,7 +37,7 @@ struct TableList: ParsableCommand {
         abstract: "Print the tables of a note",
         discussion: """
         Prints each table as tab-separated rows under a "# table N" line.
-        With --json prints an array of tables, each one an array of rows.
+        With --json prints {id, tables}. Each table has its number for --table and its rows.
 
         EXAMPLE
           nb table ls <id> --json
@@ -53,7 +53,7 @@ struct TableList: ParsableCommand {
             let rows = grid.map { $0.map { $0.replacingOccurrences(of: "\t", with: " ").replacingOccurrences(of: "\n", with: " ") }.joined(separator: "\t") }
             return (["# table \(number + 1)"] + rows).joined(separator: "\n")
         }.joined(separator: "\n")
-        try output.write(tables, text: text)
+        try output.write(["id": result["id"] as Any, "tables": tables.enumerated().map { ["table": $0.offset + 1, "rows": $0.element] }], text: text)
     }
 }
 

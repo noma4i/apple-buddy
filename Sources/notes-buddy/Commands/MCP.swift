@@ -17,7 +17,7 @@ struct MCPCommand: ParsableCommand {
         guard let executable = Bundle.main.executableURL else { throw ValidationError("Cannot locate the nb executable") }
         let commands = MCPCommands(executable: executable)
         let server = Server(name: "notes-buddy", version: NotesBuddy.releaseVersion,
-                            instructions: "Use search or ls to get note UUIDs. Unique prefixes need at least 8 characters. Tools return CLI JSON data. Writes wait for iCloud acknowledgement. Only open displays Notes. Export saves local files. Restore creates an isolated copy, never overwrites live Notes. Use help for command details.",
+                            instructions: "Use search or ls to get note UUIDs. Unique prefixes need at least 8 characters. Folders accept a name, a path such as Work/Project or a UUID from folders. A folder filter in ls, search and stats includes subfolders. Tools return CLI JSON data. Writes wait for iCloud acknowledgement. Only open displays Notes. Export saves local files. Restore creates an isolated copy, never overwrites live Notes. Use help for command details.",
                             capabilities: .init(tools: .init()))
         let completed = DispatchSemaphore(value: 0)
         let outcome = MCPCompletion()
@@ -124,7 +124,14 @@ struct MCPToolCommand {
         let name = command.joined(separator: "_").replacingOccurrences(of: "-", with: "_")
         let readOnly = ["version", "folders", "ls", "stats", "show", "search", "inspect", "table_ls", "attachments_ls", "links_ls"].contains(name)
         let additive = ["new", "mkfolder", "insert", "attach", "attachments_add", "links_add", "pin", "unpin", "open", "backup", "restore", "snapshot_db", "attachments_export"].contains(name)
-        let description = [info.abstract, info.discussion].compactMap { $0 }.joined(separator: "\n\n") + "\nCLI: nb " + command.joined(separator: " ") + ". Returns structured JSON. UUID prefixes need at least 8 characters."
+        let action = ["attachments", "links"].contains(command.first ?? "") ? command.last : nil
+        let discussion = info.discussion.map { text in
+            text.components(separatedBy: "\n").filter { line in
+                guard let action, line.hasPrefix("  nb ") else { return true }
+                return line.hasPrefix("  nb \(command[0]) \(action) ")
+            }.joined(separator: "\n")
+        }
+        let description = [info.abstract, discussion].compactMap { $0 }.joined(separator: "\n\n") + "\nCLI: nb " + command.joined(separator: " ") + ". Returns structured JSON. Every id, url, path and name in a result is accepted as input."
         var schema: [String: Value] = ["type": "object", "properties": .object(properties), "required": .array(required), "additionalProperties": false]
         if name == "attachments_export" {
             schema["oneOf"] = .array([.object(["required": ["directory"], "not": .object(["required": ["file"]])]),
