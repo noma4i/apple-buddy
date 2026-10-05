@@ -1173,10 +1173,10 @@ static void NBRequire(BOOL valid, NSString *message) {
                             if ([value isKindOfClass:NSString.class] && value.length) [indexedParts addObject:value];
                         }
                         [documents addObjectsFromArray:indexedParts];
-                        NSURL *file = [attachment fileURL];
-                        if (!file || ![file checkResourceIsReachableAndReturnError:nil]) { unavailableDocuments++; continue; }
                         UTType *type = [UTType typeWithIdentifier:[attachment valueForKey:@"typeUTI"]];
                         if (![type conformsToType:UTTypePDF] && ![type conformsToType:UTTypeImage]) continue;
+                        NSURL *file = [attachment fileURL];
+                        if (!file || ![file checkResourceIsReachableAndReturnError:nil]) { unavailableDocuments++; continue; }
                         if ([field isEqualToString:@"all"] && [NBSearchText([indexedParts componentsJoinedByString:@"\n"]) rangeOfString:query options:NSCaseInsensitiveSearch].location != NSNotFound) continue;
                         [files addObject:file];
                         [documentFiles addObject:@{@"file":file, @"note":readingIdentifier, @"attachment":[self publicIdentifierForObject:attachment]}];

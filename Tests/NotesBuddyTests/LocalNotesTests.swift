@@ -351,7 +351,12 @@ final class LocalNotesTests: XCTestCase {
         let found = try XCTUnwrap(result["notes"] as? [[String: Any]])
         XCTAssertEqual(found.first?["id"] as? String, noteID)
         XCTAssertEqual(found.first?["matchedFields"] as? [String], ["document"])
-        XCTAssertEqual(result["unavailableDocuments"] as? Int, 1)
+        XCTAssertEqual(result["unavailableDocuments"] as? Int, 0)
+        let context = try XCTUnwrap(NBNotes(url: database, readOnly: false).value(forKey: "context") as? NSManagedObjectContext)
+        let note = try context.existingObject(with: try XCTUnwrap(context.persistentStoreCoordinator?.managedObjectID(forURIRepresentation: URL(string: noteID)!)))
+        try XCTUnwrap((note.value(forKey: "attachments") as? Set<NSManagedObject>)?.first).setValue("com.adobe.pdf", forKey: "typeUTI")
+        try context.save()
+        XCTAssertEqual(try NBNotes(url: database, readOnly: true).search("Zephyr", options: ["field": "document"])["unavailableDocuments"] as? Int, 1)
     }
 
     func testImportCommitsAllObjectsOrNoneAndDoesNotDuplicate() throws {
@@ -794,6 +799,10 @@ final class LocalNotesTests: XCTestCase {
         XCTAssertEqual(again.0, 1, again.2)
         XCTAssertFalse(again.2.contains("Usage:"), again.2)
         XCTAssertTrue(again.1.isEmpty)
+        let empty = try run(["attachments", "export", targetID, "--directory", directory.appendingPathComponent("empty-export").path])
+        XCTAssertEqual(empty.0, 1, empty.2)
+        XCTAssertTrue(empty.2.contains("note has no files to export"), empty.2)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: directory.appendingPathComponent("empty-export").path))
         let jsonResult = try run(["attachments", "export", id, "--directory", directory.appendingPathComponent("json-export").path, "--json"])
         XCTAssertEqual(jsonResult.0, 0, jsonResult.2)
         let json = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(jsonResult.1.utf8)) as? [String: Any])

@@ -186,6 +186,7 @@ nb tags "$note" --add 'invoices/tech,review'
 Export saves local files without changing the note. It checks the whole batch and never overwrites existing files.
 Duplicate names get numeric suffixes. Tables are skipped. Disk errors can leave completed copies.
 Missing iCloud files are not downloaded. Add `--attachment` to directory export to select 1 file.
+A note without files returns an error and creates no directory.
 
 Tags are native objects. Slashes, commas and whitespace split names into separate tags, not nested tags.
 Links are one-way. Add a reverse link for a bidirectional relationship.
@@ -211,6 +212,7 @@ nb import-bear
 ```
 
 Import reads Bear without modifying it. Tag paths create folders. Files, native tags and cross-references are preserved.
+Notes tags accept letters, digits, `_` and `-`. A Bear tag with a space or another character stops the import before any change.
 Repeated imports skip existing notes without overwriting them. `--repair-folders` restores their expected folder paths.
 Earlier notes can remain saved if a later import fails. Keep stderr and the JSON mapping when importing.
 

@@ -167,6 +167,11 @@ struct ImportBear: ParsableCommand {
         let directory = source.map { URL(fileURLWithPath: $0) } ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Group Containers/9K33E3U3T4.net.shinyfrog.bear/Application Data")
         let all = try readBearNotes(at: directory)
         let notes = Array(all.prefix(limit ?? all.count))
+        let tagCharacters = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "_-/"))
+        let rejectedTags = Set(notes.flatMap(\.tags)).filter { tag in
+            tag.unicodeScalars.contains { !tagCharacters.contains($0) } || tag.split(separator: "/", omittingEmptySubsequences: false).contains("")
+        }.sorted()
+        guard rejectedTags.isEmpty else { throw NotesError(description: "Bear tags are not valid Notes tags: \(rejectedTags.joined(separator: ", "))") }
         let byTitle = Dictionary(grouping: all, by: \.title)
         for note in notes {
             for title in try bearReferences(note) {

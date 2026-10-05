@@ -231,7 +231,8 @@ struct Attachments: ParsableCommand {
             }
             copies.append((source, destination, id))
         }
-        if let directory, !copies.isEmpty {
+        guard !copies.isEmpty else { throw NotesError(description: "note has no files to export") }
+        if let directory {
             try FileManager.default.createDirectory(at: URL(fileURLWithPath: directory), withIntermediateDirectories: true)
         }
         var exported: [[String: String]] = []

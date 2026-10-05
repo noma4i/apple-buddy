@@ -13,6 +13,38 @@ final class BearImportTests: XCTestCase {
         XCTAssertEqual(try verifyBearNote(note, state: correct, digests: [:]), 0)
     }
 
+    func testDryRunRejectsTagsThatNotesCannotStoreBeforeAnyChange() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var database: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(directory.appendingPathComponent("database.sqlite").path, &database), SQLITE_OK)
+        let sql = """
+        CREATE TABLE ZSFNOTE (Z_PK INTEGER, ZUNIQUEIDENTIFIER TEXT, ZTITLE TEXT, ZTEXT TEXT, ZENCRYPTED INTEGER, ZTRASHED INTEGER, ZPERMANENTLYDELETED INTEGER);
+        CREATE TABLE ZSFNOTETAG (Z_PK INTEGER, ZTITLE TEXT);
+        CREATE TABLE Z_5TAGS (Z_5NOTES INTEGER, Z_13TAGS INTEGER);
+        CREATE TABLE ZSFNOTEFILE (ZNOTE INTEGER, ZUNIQUEIDENTIFIER TEXT, ZFILENAME TEXT, ZDOWNLOADED INTEGER, ZENCRYPTED INTEGER, ZUNUSED INTEGER, ZPERMANENTLYDELETED INTEGER, ZINDEX INTEGER, Z_PK INTEGER);
+        INSERT INTO ZSFNOTE VALUES (1,'source-id','Code','# Code',0,0,0);
+        INSERT INTO ZSFNOTETAG VALUES (1,'dev/c++'),(2,'my tag'),(3,'work/2024_q1-plan');
+        INSERT INTO Z_5TAGS VALUES (1,1),(1,2),(1,3);
+        """
+        XCTAssertEqual(sqlite3_exec(database, sql, nil, nil, nil), SQLITE_OK)
+        sqlite3_close(database)
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: ".build/debug/nb")
+        process.arguments = ["import-bear", "--source", directory.path, "--dry-run"]
+        let output = Pipe(), errors = Pipe()
+        process.standardOutput = output
+        process.standardError = errors
+        try process.run()
+        let text = String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        let message = String(decoding: errors.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        process.waitUntilExit()
+        XCTAssertEqual(process.terminationStatus, 1, message)
+        XCTAssertTrue(text.isEmpty, text)
+        XCTAssertTrue(message.contains("Bear tags are not valid Notes tags: dev/c++, my tag"), message)
+    }
+
     func testMarkdownSeparatorsAreContentNotYAML() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)

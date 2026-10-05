@@ -90,7 +90,7 @@ final class OutputTests: XCTestCase {
         let unavailable = try Attachments.parse(["export", "fixture", "--directory", missing.path])
         XCTAssertThrowsError(try unavailable.exportFiles([items[0], ["id": "missing", "available": false]]))
         XCTAssertFalse(FileManager.default.fileExists(atPath: missing.path))
-        XCTAssertTrue(try unavailable.exportFiles([]).isEmpty)
+        XCTAssertThrowsError(try unavailable.exportFiles([]))
         XCTAssertFalse(FileManager.default.fileExists(atPath: missing.path))
         let selected = try Attachments.parse(["export", "fixture", "--attachment", "two", "--file", directory.appendingPathComponent("single.txt").path])
         XCTAssertEqual(try selected.exportFiles(items).first?["attachment"], "two")
