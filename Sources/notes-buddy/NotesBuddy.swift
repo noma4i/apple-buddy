@@ -16,10 +16,15 @@ struct NotesBuddy: ParsableCommand {
                 print(positionalHelp(helpMessage(for: commandType)))
                 return
             }
-            let isAction = (commandType == Attachments.self && Attachments.Action(rawValue: argument) != nil)
-                || (commandType == Links.self && Links.Action(rawValue: argument) != nil)
-            if isAction && arguments.dropFirst(index + 1).first == "help" {
-                print(positionalHelp(helpMessage(for: commandType)))
+            var unusedOptions: Set<String>?
+            if commandType == Attachments.self, let action = Attachments.Action(rawValue: argument) {
+                unusedOptions = Set(Attachments.optionsForActions.filter { !$0.value.contains(action) }.keys)
+            }
+            if commandType == Links.self, let action = Links.Action(rawValue: argument) {
+                unusedOptions = Set(Links.optionsForActions.filter { !$0.value.contains(action) }.keys)
+            }
+            if let unusedOptions, arguments.dropFirst(index + 1).first == "help" {
+                print(actionHelp(positionalHelp(helpMessage(for: commandType)), command: commandType._commandName, action: argument, without: unusedOptions))
                 return
             }
             guard let subcommand = commandType.configuration.subcommands.first(where: { $0._commandName == argument }) else { break }
@@ -48,6 +53,17 @@ struct NotesBuddy: ParsableCommand {
             .replacingOccurrences(of: "Unexpected argument", with: "Unknown command or extra argument")
             .replacingOccurrences(of: "Missing expected argument", with: "Provide the argument")
             .replacingOccurrences(of: "Unknown option", with: "Unsupported option")
+    }
+
+    static func actionHelp(_ text: String, command: String, action: String, without options: Set<String>) -> String {
+        var skipping = false
+        return text.components(separatedBy: "\n").compactMap { line -> String? in
+            if line.hasPrefix("  --") { skipping = options.contains { line.hasPrefix("  --\($0) <") } }
+            else if !line.hasPrefix("    ") { skipping = false }
+            if skipping || (line.hasPrefix("  nb \(command) ") && !line.hasPrefix("  nb \(command) \(action) ")) { return nil }
+            guard line.hasPrefix("USAGE: ") else { return line }
+            return options.reduce(line.replacingOccurrences(of: "<action>", with: action)) { $0.replacingOccurrences(of: " [--\($1) <\($1)>]", with: "") }
+        }.joined(separator: "\n")
     }
 
     static func positionalHelp(_ text: String) -> String {

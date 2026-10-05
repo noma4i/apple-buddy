@@ -469,6 +469,19 @@ final class LocalNotesTests: XCTestCase {
         XCTAssertEqual(try found("quartzpage", "all"), [web])
     }
 
+    func testTextAndTableErrorsNameTheInputAndTheActualSize() throws {
+        let store = try NBNotes(url: database, readOnly: false)
+        let plain = try store.createNote(inFolder: "Fixture", html: "<h1>Errors</h1><p>same same</p>")
+        XCTAssertEqual(message(try store.editNote(plain, operation: "replace", options: ["find": "absent", "replacement": "x"])), "Text not found: absent")
+        XCTAssertEqual(message(try store.editNote(plain, operation: "replace", options: ["find": "same", "replacement": "x"])), "Text occurs 2 times: same. Use --all or a longer unique text")
+        XCTAssertEqual(message(try store.editNote(plain, operation: "insert", options: ["text": "x", "after": "absent"])), "Text not found: absent")
+        XCTAssertEqual(message(try store.editNote(plain, operation: "table-set", options: ["table": 1, "row": 1, "column": 1, "value": "x"])), "Table 1 not found. The note has 0 tables")
+        _ = try store.editNote(plain, operation: "table-new", options: ["rows": 2, "columns": 3])
+        XCTAssertEqual(message(try store.editNote(plain, operation: "table-set", options: ["table": 1, "row": 5, "column": 1, "value": "x"])), "Cell row 5, column 1 not found. The table has 2 rows and 3 columns")
+        XCTAssertEqual(message(try store.editNote(plain, operation: "table-rm-row", options: ["table": 1, "at": 9])), "Row 9 not found. The table has 2 rows")
+        XCTAssertEqual(message(try store.editNote(plain, operation: "table-rm-col", options: ["table": 1, "at": 9])), "Column 9 not found. The table has 3 columns")
+    }
+
     func testFolderReferencesAcceptPathsNamesAndReportTheInput() throws {
         let store = try NBNotes(url: database, readOnly: false)
         let sub = try store.createFolder("Sub", parent: "Fixture")

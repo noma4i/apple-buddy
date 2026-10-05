@@ -997,7 +997,8 @@ static void NBRequire(BOOL valid, NSString *message) {
 }
 
 - (NSArray<NSValue *> *)rangesForText:(NSString *)find inString:(NSString *)text all:(BOOL)all {
-    NBRequire(find.length && ![find containsString:@"\uFFFC"], @"Text selection must be nonempty and cannot include attachment markers");
+    NBRequire(find.length && ![find containsString:@"\uFFFC"], @"Text to find must not be empty and cannot include attachment markers");
+    NSString *shown = find.length > 80 ? [[find substringToIndex:[find rangeOfComposedCharacterSequenceAtIndex:80].location] stringByAppendingString:@"..."] : find;
     NSMutableArray *ranges = [NSMutableArray array];
     NSRange remaining = NSMakeRange(0, text.length);
     while (remaining.length) {
@@ -1006,8 +1007,8 @@ static void NBRequire(BOOL valid, NSString *message) {
         [ranges addObject:[NSValue valueWithRange:range]];
         remaining = NSMakeRange(NSMaxRange(range), text.length - NSMaxRange(range));
     }
-    NBRequire(ranges.count, @"Text not found");
-    NBRequire(ranges.count == 1 || all, @"Text occurs more than once, use --all");
+    NBRequire(ranges.count, [NSString stringWithFormat:@"Text not found: %@", shown]);
+    NBRequire(ranges.count == 1 || all, [NSString stringWithFormat:@"Text occurs %lu times: %@. Use --all or a longer unique text", (unsigned long)ranges.count, shown]);
     return ranges;
 }
 
@@ -1160,21 +1161,21 @@ static void NBRequire(BOOL valid, NSString *message) {
         NSMutableArray *tables = [NSMutableArray array];
         for (NSManagedObject *item in [self attachmentsInNote:note]) if ([[item valueForKey:@"isTable"] boolValue]) [tables addObject:item];
         NSInteger index = [options[@"table"] integerValue];
-        NBRequire(index >= 1 && index <= (NSInteger)tables.count, @"Table index out of range");
+        NBRequire(index >= 1 && index <= (NSInteger)tables.count, [NSString stringWithFormat:@"Table %ld not found. The note has %lu tables", (long)index, (unsigned long)tables.count]);
         attachment = tables[index - 1];
         id table = [[attachment tableModel] table];
         NBRequire(table != nil, @"Notes could not read the table");
         NSInteger row = [options[@"row"] integerValue] - 1;
         NSInteger column = [options[@"column"] integerValue] - 1;
         if ([operation isEqualToString:@"table-set"]) {
-            NBRequire(row >= 0 && row < (NSInteger)[table rowCount] && column >= 0 && column < (NSInteger)[table columnCount], @"Cell index out of range");
+            NBRequire(row >= 0 && row < (NSInteger)[table rowCount] && column >= 0 && column < (NSInteger)[table columnCount], [NSString stringWithFormat:@"Cell row %ld, column %ld not found. The table has %lu rows and %lu columns", (long)row + 1, (long)column + 1, (unsigned long)[table rowCount], (unsigned long)[table columnCount]]);
             [table setAttributedString:[[NSAttributedString alloc] initWithString:options[@"value"]] columnIndex:column rowIndex:row];
         } else {
             BOOL isRow = [operation hasSuffix:@"row"];
             BOOL insert = [operation hasPrefix:@"table-add"];
             NSInteger count = isRow ? [table rowCount] : [table columnCount];
             NSInteger at = options[@"at"] ? [options[@"at"] integerValue] - 1 : count;
-            NBRequire(at >= 0 && at < count + (insert ? 1 : 0), @"Row or column index out of range");
+            NBRequire(at >= 0 && at < count + (insert ? 1 : 0), [NSString stringWithFormat:@"%@ %ld not found. The table has %ld %@", isRow ? @"Row" : @"Column", (long)at + 1, (long)count, isRow ? @"rows" : @"columns"]);
             NBRequire(insert || count > 1, @"Cannot remove the last row or column");
             if (isRow && insert) [table insertRowAtIndex:at];
             else if (isRow) [table removeRowAtIndex:at];

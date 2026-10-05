@@ -113,6 +113,21 @@ final class HelpTests: XCTestCase {
             }
         }
     }
+    func testActionHelpShowsOnlyTheOptionsAndExamplesOfThatAction() throws {
+        let listing = try output(["attachments", "ls", "help"]).1
+        XCTAssertTrue(listing.contains("USAGE: nb attachments [--json] ls <id>"), listing)
+        for hidden in ["--file", "--directory", "--attachment", "--to", "--size", "--before", "--after", "attachments add", "attachments export"] {
+            XCTAssertFalse(listing.contains(hidden), "\(hidden): \(listing)")
+        }
+        XCTAssertTrue(listing.contains("nb attachments ls <id>"), listing)
+        let export = try output(["attachments", "export", "help"]).1
+        for shown in ["--attachment", "--file", "--directory", "nb attachments export <id> --directory saved-files"] { XCTAssertTrue(export.contains(shown), "\(shown): \(export)") }
+        for hidden in ["--to ", "--size", "--before", "attachments add"] { XCTAssertFalse(export.contains(hidden), "\(hidden): \(export)") }
+        let linking = try output(["links", "add", "help"]).1
+        XCTAssertTrue(linking.contains("--to") && linking.contains("--before") && !linking.contains("--link"), linking)
+        XCTAssertTrue(try output(["attachments", "help"]).1.contains("--directory"))
+    }
+
     func testPositionalActionsHaveBareHelpWithoutReadingNotes() throws {
         let commands = ["ls", "export", "add", "rm", "replace", "mv", "view"].map { ["attachments", $0] }
           + ["ls", "add", "rm"].map { ["links", $0] }
