@@ -147,6 +147,27 @@ final class RemindersTests: XCTestCase {
         XCTAssertEqual(try run(["reminders", "add", "x"]).code, 1, "no default list yet")
     }
 
+    func testLocationRemindersCarryPlaceRadiusAndProximity() throws {
+        _ = try run(["reminders", "access"])
+        _ = try run(["reminders", "mklist", "Errands"])
+        let added = try run(["reminders", "add", "Return books", "--list", "Errands", "--arrive=-33.8688,151.2093", "--radius", "200"])
+        XCTAssertEqual(added.code, 0, added.err)
+        let id = added.out.trimmingCharacters(in: .whitespacesAndNewlines)
+        let shown = try run(["reminders", "show", id])
+        XCTAssertTrue(shown.out.contains("Location: arriving at -33.8688,151.2093 (-33.8688, 151.2093, 200 m)"), shown.out)
+        let object = try XCTUnwrap(try json(try run(["reminders", "show", id, "--json"]).out) as? [String: Any])
+        let location = try XCTUnwrap(object["location"] as? [String: Any])
+        XCTAssertEqual(location["proximity"] as? String, "arrive")
+        XCTAssertEqual(location["radius"] as? Double, 200)
+        XCTAssertEqual(try run(["reminders", "edit", id, "--leave=-33.9,151.2", "--radius", "50"]).code, 0)
+        let edited = try XCTUnwrap(try json(try run(["reminders", "show", id, "--json"]).out) as? [String: Any])
+        XCTAssertEqual((edited["location"] as? [String: Any])?["proximity"] as? String, "leave")
+        XCTAssertEqual(try run(["reminders", "edit", id, "--clear-location"]).code, 0)
+        XCTAssertNil(try XCTUnwrap(try json(try run(["reminders", "show", id, "--json"]).out) as? [String: Any])["location"])
+        XCTAssertEqual(try run(["reminders", "add", "x", "--list", "Errands", "--arrive", "a", "--leave", "b"]).code, 64)
+        XCTAssertEqual(try run(["reminders", "add", "x", "--list", "Errands", "--arrive", "1,2", "--radius", "0"]).code, 64)
+    }
+
     func testDateArgumentParsesZonesDaysAndRejectsOtherForms() throws {
         let zoned = try XCTUnwrap(DateArgument.parse("2026-10-07T09:00:00+02:00"))
         XCTAssertTrue(zoned.hasTime)

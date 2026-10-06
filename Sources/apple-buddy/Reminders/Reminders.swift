@@ -1,4 +1,5 @@
 import ArgumentParser
+import CoreLocation
 import Foundation
 
 struct Reminders: ParsableCommand {
@@ -24,9 +25,42 @@ func reminderText(_ item: ReminderItem, lists: [EventCalendar]) -> String {
     lines.append("Completed: \(item.completed)" + (item.completionDate.map { " at " + DateText.stamp($0) } ?? ""))
     if let url = item.url { lines.append("URL: \(url)") }
     if !item.alarms.isEmpty { lines.append("Alarms: " + item.alarms.map { "\($0) min before" }.joined(separator: ", ")) }
+    if let location = item.location {
+        lines.append("Location: \(location.proximity == .arrive ? "arriving at" : "leaving") \(location.title) (\(location.latitude), \(location.longitude), \(Int(location.radius)) m)")
+    }
     if let recurrence = item.recurrence { lines.append("Repeats: " + recurrenceText(recurrence)) }
     if let notes = item.notes, !notes.isEmpty { lines.append(""); lines.append(notes) }
     return lines.joined(separator: "\n")
+}
+
+func geocode(_ place: String) throws -> CLLocation {
+    if let coordinates = ProcessInfo.processInfo.environment["ABDY_GEOCODE"]?.split(separator: ",").compactMap({ Double($0) }), coordinates.count == 2 {
+        return CLLocation(latitude: coordinates[0], longitude: coordinates[1])
+    }
+    var done = false
+    var found: CLLocation?
+    var failure: Error?
+    let geocoder = CLGeocoder()
+    geocoder.geocodeAddressString(place) { marks, error in found = marks?.first?.location; failure = error; done = true }
+    let deadline = Date().addingTimeInterval(30)
+    while !done {
+        guard Date() < deadline else { throw NotesError(description: "Geocoding did not answer within 30 seconds") }
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+    }
+    if let failure { throw NotesError(description: "Place not found: \(place). \(failure.localizedDescription)") }
+    guard let found else { throw NotesError(description: "Place not found: \(place). Use an address or a coordinate pair such as -33.8688,151.2093") }
+    return found
+}
+
+func locationAlarm(arrive: String?, leave: String?, radius: Double) throws -> LocationAlarm? {
+    guard arrive != nil || leave != nil else { return nil }
+    guard !(arrive != nil && leave != nil) else { throw ValidationError("choose either --arrive or --leave") }
+    guard radius > 0 else { throw ValidationError("--radius must be positive") }
+    let place = (arrive ?? leave)!
+    let point: CLLocation
+    let parts = place.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+    if parts.count == 2, let latitude = Double(parts[0]), let longitude = Double(parts[1]) { point = CLLocation(latitude: latitude, longitude: longitude) } else { point = try geocode(place) }
+    return LocationAlarm(title: place, latitude: point.coordinate.latitude, longitude: point.coordinate.longitude, radius: radius, proximity: arrive != nil ? .arrive : .leave)
 }
 
 func recurrenceText(_ recurrence: Recurrence) -> String {
@@ -235,6 +269,9 @@ struct ReminderFields: ParsableArguments {
     @Option(help: "Priority 0 (none), 1 (high), 5 (medium) or 9 (low)") var priority: Int?
     @Option(help: "Web address") var url: String?
     @Option(help: "Alarm this many minutes before the due date, repeatable") var alarm: [Int] = []
+    @Option(help: "Remind on arriving at this address, place or coordinate pair, written --arrive=-33.8688,151.2093 for a negative latitude") var arrive: String?
+    @Option(help: "Remind on leaving this address, place or coordinate pair") var leave: String?
+    @Option(help: "Radius in meters for --arrive and --leave") var radius: Double = 100
     @Option(name: .customLong("repeat"), help: "Repeat daily, weekly, monthly or yearly") var repeats: Recurrence.Frequency?
     @Option(help: "Repeat every N periods") var interval: Int = 1
     @Option(help: ArgumentHelp("Last repeat date, \(DateArgument.help)")) var until: DateArgument?
@@ -261,6 +298,7 @@ struct AddReminder: ParsableCommand {
         EXAMPLES
           abdy reminders add "Buy milk" --list Groceries --due 2026-10-07T18:00 --alarm 30
           abdy reminders add "Pay rent" --due 2026-10-01 --repeat monthly --priority 1
+          abdy reminders add "Return library books" --arrive "Sydney Central Library" --radius 200
         """)
     @Argument(help: "Reminder title") var title: String
     @Option(help: ArgumentHelp("List, by \(EventHelp.list)")) var list: String?
@@ -276,7 +314,8 @@ struct AddReminder: ParsableCommand {
         }
         guard !target.readOnly else { throw NotesError(description: "List \(target.title) is read-only and cannot hold new reminders") }
         let item = ReminderItem(id: "", title: title, notes: fields.notes, listID: target.id, list: target.title, due: fields.due?.date, dueHasTime: fields.due?.hasTime ?? false, priority: fields.priority ?? 0,
-                                completed: false, completionDate: nil, url: fields.url, alarms: fields.alarm, recurrence: fields.recurrence(), created: nil, modified: nil)
+                                completed: false, completionDate: nil, url: fields.url, alarms: fields.alarm, location: try locationAlarm(arrive: fields.arrive, leave: fields.leave, radius: fields.radius),
+                                recurrence: fields.recurrence(), created: nil, modified: nil)
         let saved = try store.saveReminders([item])[0]
         try output.writeAction("reminders add", try eventJSON(saved), notesSync: false)
     }
@@ -285,7 +324,7 @@ struct AddReminder: ParsableCommand {
 struct EditReminder: ParsableCommand {
     @OptionGroup var output: OutputOptions
     static let configuration = CommandConfiguration(commandName: "edit", abstract: "Change a reminder", discussion: """
-        Changes only the given fields. --clear-due removes the due date and repeat rule, --clear-alarms removes alarms.
+        Changes only the given fields. --clear-due removes the due date and repeat rule, --clear-alarms removes time alarms, --clear-location the location alarm.
 
         EXAMPLE
           abdy reminders edit <id> --title "Buy oat milk" --due 2026-10-08T09:00
@@ -294,7 +333,8 @@ struct EditReminder: ParsableCommand {
     @Option(help: "New title") var title: String?
     @OptionGroup var fields: ReminderFields
     @Flag(help: "Remove the due date and repeat rule") var clearDue = false
-    @Flag(help: "Remove every alarm") var clearAlarms = false
+    @Flag(help: "Remove every time alarm") var clearAlarms = false
+    @Flag(help: "Remove the location alarm") var clearLocation = false
 
     func run() throws {
         guard !(clearDue && fields.due != nil) else { throw ValidationError("choose either --due or --clear-due") }
@@ -309,6 +349,8 @@ struct EditReminder: ParsableCommand {
         if let url = fields.url { item.url = url }
         if clearAlarms { item.alarms = [] }
         if !fields.alarm.isEmpty { item.alarms = fields.alarm }
+        if clearLocation { item.location = nil }
+        if let location = try locationAlarm(arrive: fields.arrive, leave: fields.leave, radius: fields.radius) { item.location = location }
         if let recurrence = fields.recurrence() { item.recurrence = recurrence }
         if fields.repeats != nil && item.due == nil { throw ValidationError("--repeat needs a due date") }
         try output.writeAction("reminders edit", try eventJSON(try store.saveReminders([item])[0]), notesSync: false)

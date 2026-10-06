@@ -29,6 +29,15 @@ struct Recurrence: Codable, Equatable {
     var count: Int?
 }
 
+struct LocationAlarm: Codable, Equatable {
+    enum Proximity: String, Codable { case arrive, leave }
+    var title: String
+    var latitude: Double
+    var longitude: Double
+    var radius: Double
+    var proximity: Proximity
+}
+
 struct ReminderItem: Codable, Equatable {
     var id: String
     var title: String
@@ -42,6 +51,7 @@ struct ReminderItem: Codable, Equatable {
     var completionDate: Date?
     var url: String?
     var alarms: [Int]
+    var location: LocationAlarm?
     var recurrence: Recurrence?
     var created: Date?
     var modified: Date?

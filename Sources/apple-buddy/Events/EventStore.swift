@@ -1,4 +1,5 @@
 import AppKit
+import CoreLocation
 import EventKit
 import Foundation
 
@@ -149,7 +150,13 @@ final class SystemEventStore: EventStore {
         }
         return ReminderItem(id: reminder.calendarItemIdentifier, title: reminder.title ?? "", notes: reminder.notes, listID: reminder.calendar.calendarIdentifier, list: reminder.calendar.title, due: due, dueHasTime: hasTime,
                             priority: reminder.priority, completed: reminder.isCompleted, completionDate: reminder.completionDate, url: reminder.url?.absoluteString,
-                            alarms: (reminder.alarms ?? []).map { Int(-$0.relativeOffset / 60) }, recurrence: reminder.recurrenceRules?.first.map(Self.describe), created: reminder.creationDate, modified: reminder.lastModifiedDate)
+                            alarms: (reminder.alarms ?? []).filter { $0.structuredLocation == nil }.map { Int(-$0.relativeOffset / 60) }, location: (reminder.alarms ?? []).compactMap(Self.locationAlarm).first,
+                            recurrence: reminder.recurrenceRules?.first.map(Self.describe), created: reminder.creationDate, modified: reminder.lastModifiedDate)
+    }
+
+    private static func locationAlarm(_ alarm: EKAlarm) -> LocationAlarm? {
+        guard let place = alarm.structuredLocation, let point = place.geoLocation else { return nil }
+        return LocationAlarm(title: place.title ?? "", latitude: point.coordinate.latitude, longitude: point.coordinate.longitude, radius: place.radius, proximity: alarm.proximity == .leave ? .leave : .arrive)
     }
 
     private static func describe(_ rule: EKRecurrenceRule) -> Recurrence {
@@ -209,6 +216,15 @@ final class SystemEventStore: EventStore {
         reminder.url = item.url.flatMap(URL.init(string:))
         for alarm in reminder.alarms ?? [] { reminder.removeAlarm(alarm) }
         for minutes in item.alarms { reminder.addAlarm(EKAlarm(relativeOffset: TimeInterval(-minutes * 60))) }
+        if let location = item.location {
+            let place = EKStructuredLocation(title: location.title)
+            place.geoLocation = CLLocation(latitude: location.latitude, longitude: location.longitude)
+            place.radius = location.radius
+            let alarm = EKAlarm()
+            alarm.structuredLocation = place
+            alarm.proximity = location.proximity == .leave ? .leave : .enter
+            reminder.addAlarm(alarm)
+        }
         if reminder.recurrenceRules?.first.map(Self.describe) != item.recurrence {
             for rule in reminder.recurrenceRules ?? [] { reminder.removeRecurrenceRule(rule) }
             if let recurrence = item.recurrence { reminder.addRecurrenceRule(Self.rule(recurrence)) }
