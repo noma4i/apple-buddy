@@ -17,7 +17,7 @@ struct MCPCommand: ParsableCommand {
         guard let executable = Bundle.main.executableURL else { throw ValidationError("Cannot locate the abdy executable") }
         let commands = MCPCommands(executable: executable.resolvingSymlinksInPath())
         let server = Server(name: "apple-buddy", version: AppleBuddy.releaseVersion,
-                            instructions: "Use search or ls to get note UUIDs. Unique prefixes need at least 8 characters. Folders accept a name, a path such as Work/Project or a UUID from folders. A folder filter in ls, search and stats includes subfolders. ls and search with show return note text in one call, chars caps each text and limit caps the count. Tools return CLI JSON data. Writes save locally and return at once. Call sync once after the last write to send changes to iCloud, pin and unpin sync on their own. Only open displays Notes. Export saves local files. Restore creates an isolated copy, never overwrites live Notes. Use help for command details.",
+                            instructions: "Tools are grouped: notes_*, reminders_* and calendar_*. Reminders and Calendar need access once, run reminders_access or calendar_access when a tool reports missing access. Use notes_search or notes_ls to get note UUIDs. Unique prefixes need at least 8 characters. Folders accept a name, a path such as Work/Project or a UUID from folders. A folder filter in ls, search and stats includes subfolders. ls and search with show return note text in one call, chars caps each text and limit caps the count. Tools return CLI JSON data. Writes save locally and return at once. Call sync once after the last write to send changes to iCloud, pin and unpin sync on their own. Only open displays Notes. Export saves local files. Restore creates an isolated copy, never overwrites live Notes. Use help for command details.",
                             capabilities: .init(tools: .init()))
         let completed = DispatchSemaphore(value: 0)
         let outcome = MCPCompletion()
@@ -112,7 +112,7 @@ struct MCPToolCommand {
             let type = argument.kind == .flag ? "boolean" : argument.isRepeating ? "array" : (["row", "col", "table", "at", "limit", "offset", "chars"].contains(name) || (command.dropLast().last == "attachments" && name == "size")) ? "integer" : "string"
             types[name] = type
             var property: [String: Value] = ["type": .string(type), "description": .string(argument.abstract ?? name)]
-            if type == "array" { property["items"] = .object(["type": "string"]) }
+            if type == "array" { property["items"] = .object(["type": .string(name == "alarm" ? "integer" : "string")]) }
             if let values = argument.allValueStrings, !values.isEmpty { property["enum"] = .array(values.map(Value.string)) }
             if name == "size" && command.dropLast().last == "attachments" { property["enum"] = [0, 1, 2] }
             properties[name] = .object(property)
@@ -123,8 +123,8 @@ struct MCPToolCommand {
             types["stdin"] = "string"
         }
         let name = command.joined(separator: "_").replacingOccurrences(of: "-", with: "_")
-        let readOnly = ["version", "notes_folders", "notes_ls", "notes_stats", "notes_show", "notes_search", "notes_inspect", "notes_dups", "notes_table_ls", "notes_attachments_ls", "notes_links_ls"].contains(name)
-        let additive = ["notes_new", "notes_mkfolder", "notes_insert", "notes_attach", "notes_attachments_add", "notes_links_add", "notes_pin", "notes_unpin", "notes_open", "notes_backup", "notes_restore", "notes_snapshot_db", "notes_attachments_export"].contains(name)
+        let readOnly = ["version", "notes_folders", "notes_ls", "notes_stats", "notes_show", "notes_search", "notes_inspect", "notes_dups", "notes_table_ls", "notes_attachments_ls", "notes_links_ls", "reminders_lists", "reminders_ls", "reminders_show", "reminders_search", "calendar_calendars", "calendar_events", "calendar_show"].contains(name)
+        let additive = ["notes_new", "notes_mkfolder", "notes_insert", "notes_attach", "notes_attachments_add", "notes_links_add", "notes_pin", "notes_unpin", "notes_open", "notes_backup", "notes_restore", "notes_snapshot_db", "notes_attachments_export", "reminders_access", "reminders_mklist", "reminders_add", "calendar_access", "calendar_mkcal", "calendar_add"].contains(name)
         let action = ["attachments", "links"].contains(command.dropLast().last ?? "") ? command.last : nil
         let discussion = info.discussion.map { text in
             text.components(separatedBy: "\n").filter { line in
@@ -147,7 +147,7 @@ struct MCPToolCommand {
     func invocation(_ values: [String: Value], definitions: [MCPToolCommand]) throws -> (arguments: [String], input: Data?) {
         for (name, value) in values {
             guard let type = types[name] else { throw ValidationError("Unknown parameter: \(name)") }
-            let matches = type == "boolean" ? value.boolValue != nil : type == "integer" ? value.intValue != nil : type == "array" ? value.arrayValue?.allSatisfy { $0.stringValue != nil } == true : value.stringValue != nil
+            let matches = type == "boolean" ? value.boolValue != nil : type == "integer" ? value.intValue != nil : type == "array" ? value.arrayValue?.allSatisfy { $0.stringValue != nil || $0.intValue != nil } == true : value.stringValue != nil
             guard matches else { throw ValidationError("\(name) must be a \(type)") }
         }
         if tool.name == "help" {
@@ -165,7 +165,9 @@ struct MCPToolCommand {
                 continue
             }
             let text = value.stringValue ?? value.intValue.map(String.init) ?? ""
-            if argument.isRepeating { positionals += value.arrayValue?.compactMap(\.stringValue) ?? [] }
+            let values = value.arrayValue?.compactMap { $0.stringValue ?? $0.intValue.map(String.init) } ?? []
+            if argument.isRepeating && argument.kind == .positional { positionals += values }
+            else if argument.isRepeating, let option = argument.preferredName?.name { options += values.map { "--" + option + "=" + $0 } }
             else if argument.kind == .positional { positionals.append(text) }
             else if let option = argument.preferredName?.name {
                 if argument.kind == .flag { if value.boolValue == true { options.append("--" + option) } }

@@ -17,7 +17,7 @@ struct OutputOptions: ParsableArguments {
 
     func actionSummary(_ data: [String: Any]) -> String {
         let object: Any
-        if let title = data["title"] as? String, let folder = data["folderPath"] as? String {
+        if let title = data["title"] as? String, let folder = (data["folderPath"] ?? data["source"] ?? data["calendar"] ?? data["list"]) as? String {
             object = "\(title) in \(folder)"
         } else {
             object = data["path"] ?? data["folderPath"] ?? data["id"] ?? ""
@@ -31,14 +31,14 @@ struct OutputOptions: ParsableArguments {
         return details.joined(separator: ", ")
     }
 
-    func writeAction(_ action: String, _ value: Any) throws {
+    func writeAction(_ action: String, _ value: Any, notesSync: Bool = true) throws {
         guard let data = value as? [String: Any] else { throw NotesError(description: "Notes returned invalid action data") }
         let result = actionResult(action, data: data)
         guard let id = result["id"] as? String else { throw NotesError(description: "Notes returned no action UUID") }
-        try writeSaved(result, text: id, summary: actionSummary(result))
+        try writeSaved(result, text: id, summary: actionSummary(result), notesSync: notesSync)
     }
 
-    func writeBatch(_ action: String, items: Any, key: String, fields: [String: Any] = [:], summary text: String) throws {
+    func writeBatch(_ action: String, items: Any, key: String, fields: [String: Any] = [:], summary text: String, notesSync: Bool = true) throws {
         guard let items = items as? [[String: Any]] else { throw NotesError(description: "Notes returned invalid \(key) data") }
         let ids = try items.map { item -> String in
             guard let id = item["id"] as? String else { throw NotesError(description: "Notes returned an item without an id") }
@@ -48,13 +48,13 @@ struct OutputOptions: ParsableArguments {
         result["action"] = action
         result["saved"] = true
         result[key] = items
-        try writeSaved(result, text: ids.joined(separator: "\n"), summary: text)
+        try writeSaved(result, text: ids.joined(separator: "\n"), summary: text, notesSync: notesSync)
     }
 
-    private func writeSaved(_ result: [String: Any], text: String, summary line: String) throws {
+    private func writeSaved(_ result: [String: Any], text: String, summary line: String, notesSync: Bool) throws {
         try write(result, text: text)
         summary(line)
-        if !json, let pending = try openLocalNotes(readOnly: true).cloudStatus()["pendingObjects"] as? Int, pending > 0 {
+        if notesSync, !json, let pending = try openLocalNotes(readOnly: true).cloudStatus()["pendingObjects"] as? Int, pending > 0 {
             summary("Saved locally, run abdy notes sync to send it to iCloud")
         }
     }

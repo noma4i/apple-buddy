@@ -3,7 +3,7 @@ import PackageDescription
 
 let package = Package(
     name: "apple-buddy",
-    platforms: [.macOS(.v13)],
+    platforms: [.macOS(.v14)],
     products: [.executable(name: "abdy", targets: ["apple-buddy"])],
     dependencies: [
         .package(url: "https://github.com/apple/swift-argument-parser", from: "1.5.0"),

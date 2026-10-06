@@ -2,8 +2,8 @@
 
 # apple-buddy
 
-Read, search, edit and organize Apple Notes from the terminal. Reminders and Calendar commands are in progress.
-The executable is named `abdy`. Notes commands live under `abdy notes`.
+Read, search, edit and organize Apple Notes, Reminders and Calendar from the terminal.
+The executable is named `abdy`. Commands live in 3 groups: `abdy notes`, `abdy reminders` and `abdy calendar`.
 `nb` is an alias: `nb ls` runs `abdy notes ls`, so existing scripts keep working.
 Uses this Mac's existing accounts. No separate login or AppleScript.
 
@@ -113,6 +113,40 @@ An exact path wins over a name. Use a path or UUID when several folders share a 
 An attachment is selected by UUID, unique prefix or file name. A tag is written with or without `#`.
 Actions reject options that they do not use. For example, `attachments ls` does not accept `--file`.
 Moves preserve note IDs and contents. `rm` moves notes to Recently Deleted.
+
+## Reminders and Calendar
+
+Both groups use Apple's EventKit, so every account that Reminders and Calendar show is available: iCloud, Google, Exchange, subscriptions and delegates.
+Changes are saved at once and synchronized by macOS. No app is launched and no `sync` step exists.
+
+Access is granted once per terminal application: run `abdy reminders access` and `abdy calendar access`, allow the system dialog,
+or enable the application in System Settings, Privacy and Security, Reminders and Calendars. Without access, commands return exit code 1 with that hint.
+
+```sh
+abdy reminders lists
+abdy reminders add "Buy milk" --list Groceries --due 2026-10-07T18:00 --alarm 30 --priority 1
+abdy reminders ls --list Groceries --long
+abdy reminders edit "$reminder" --title "Buy oat milk" --clear-alarms
+abdy reminders done "$reminder"
+abdy reminders search milk --all
+abdy reminders mv "$reminder" --list Home
+
+abdy calendar calendars
+abdy calendar add "Dentist" --calendar Personal --start 2026-10-09T14:00 --duration 45 --alarm 60
+abdy calendar add "Standup" --calendar Work --start 2026-10-06T09:30 --duration 15 --repeat weekly --until 2026-12-31
+abdy calendar events --from 2026-10-06 --to 2026-10-13 --long
+abdy calendar edit "$event" --occurrence 2026-10-13T09:30:00+11:00 --span this --start 2026-10-13T10:00
+abdy calendar rm "$event" --occurrence 2026-10-13T09:30:00+11:00 --span future
+```
+
+Dates are ISO 8601: `2026-10-07T09:00`, `2026-10-07T09:00:00+11:00` or `2026-10-07` for a whole day. Output uses the local time zone.
+Lists and calendars are selected by name, UUID or a unique prefix of 8 characters. An ambiguous name lists the candidates with their accounts.
+Reminders and events are selected by UUID or a unique prefix. Event prefixes match events from 1 year ago to 2 years ahead.
+`--alarm` is minutes before the due date or start, repeatable. `--repeat daily|weekly|monthly|yearly` with `--interval`, `--until` or `--count`.
+A repeating event needs `--occurrence` from `events --json` and `--span this` or `--span future` for `edit` and `rm`. Future edits start a new series with a new UUID.
+All-day events include both `--start` and `--end` days. Read-only calendars such as subscriptions and holidays are listed and refuse writes.
+Attendees are shown by `calendar show` but cannot be invited. Reminders and Calendar have no trash: `rm` deletes for good.
+`done`, `undone`, `mv` and `rm` take many ids or `-` for ids from stdin, check every id first and save once.
 
 ## Bulk changes
 

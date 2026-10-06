@@ -283,7 +283,7 @@ final class HelpTests: XCTestCase {
             process.waitUntilExit()
             XCTAssertEqual(process.terminationStatus, 0, "\(command): \(output)")
             XCTAssertFalse(output.contains("--quit-notes"), "\(command): automatic quit must not require a flag")
-            if !["mcp", "notes"].contains(command) { XCTAssertTrue(output.contains("--json"), "\(command): JSON output must be available") }
+            if !["mcp", "notes", "reminders", "calendar"].contains(command) { XCTAssertTrue(output.contains("--json"), "\(command): JSON output must be available") }
             XCTAssertTrue(output.contains("USAGE: abdy" + (command.isEmpty ? "" : " " + command)), "\(command): \(output)")
         }
     }

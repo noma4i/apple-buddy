@@ -43,7 +43,7 @@ func noteReferences(_ ids: [String]) throws -> [String] {
         let trimmed = line.trimmingCharacters(in: .whitespaces)
         if !trimmed.isEmpty { lines.append(trimmed) }
     }
-    guard !lines.isEmpty else { throw ValidationError("stdin has no note ids, 1 per line") }
+    guard !lines.isEmpty else { throw ValidationError("stdin has no ids, 1 per line") }
     return lines
 }
 

@@ -117,7 +117,12 @@ final class MCPTests: XCTestCase {
         let tags = try XCTUnwrap(definitions.first { $0.tool.name == "notes_tags" })
         XCTAssertEqual(tags.types["ids"], "array")
         XCTAssertTrue(try AppleBuddy.parseAsRoot(try tags.invocation(["rename": "a", "to": "b"], definitions: definitions).arguments) is Tags)
-        for name in ["notes_mvfolder", "notes_renamefolder", "notes_dups"] { XCTAssertNotNil(definitions.first { $0.tool.name == name }, name) }
+        for name in ["notes_mvfolder", "notes_renamefolder", "notes_dups", "reminders_add", "reminders_done", "calendar_events", "calendar_rm"] { XCTAssertNotNil(definitions.first { $0.tool.name == name }, name) }
+        let events = try XCTUnwrap(definitions.first { $0.tool.name == "calendar_events" })
+        XCTAssertEqual(events.tool.annotations.readOnlyHint, true)
+        XCTAssertEqual(events.types["calendar"], "array")
+        XCTAssertTrue(try AppleBuddy.parseAsRoot(try events.invocation(["from": "2026-10-06", "to": "2026-10-07", "calendar": ["Work"]], definitions: definitions).arguments) is Events)
+        XCTAssertEqual(try XCTUnwrap(definitions.first { $0.tool.name == "reminders_rm" }).tool.annotations.destructiveHint, true)
     }
 
     func testOpenCommandAcceptsUUIDPrefixesAndHasHelp() throws {

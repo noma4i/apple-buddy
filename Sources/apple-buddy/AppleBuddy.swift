@@ -82,7 +82,7 @@ struct AppleBuddy: ParsableCommand {
         commandName: "abdy",
         abstract: "Create, edit and organize Apple Notes, Reminders and Calendar from the terminal",
         version: releaseVersion,
-        subcommands: [Notes.self, Version.self, MCPCommand.self]
+        subcommands: [Notes.self, Reminders.self, CalendarGroup.self, Version.self, MCPCommand.self]
     )
 }
 
