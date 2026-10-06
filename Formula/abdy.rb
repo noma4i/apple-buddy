@@ -1,7 +1,7 @@
 class Abdy < Formula
   desc "Read, search, edit and organize Apple Notes, Reminders and Calendar"
   homepage "https://github.com/noma4i/apple-buddy"
-  url "https://github.com/noma4i/apple-buddy.git", revision: "4d5bfa2a4f0a3643dc58e19e5ac9095c4df61d3a"
+  url "https://github.com/noma4i/apple-buddy.git", revision: "ba599d89193e3945954ffd8457eb6bece2b0cce0"
   version "1.0.0"
 
   depends_on :macos
