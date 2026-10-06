@@ -9,6 +9,7 @@ struct New: ParsableCommand {
         Creates the note in an existing folder (see `mkfolder`) and prints its id.
         --title adds a heading above the body. The body comes from an HTML file, or from stdin with `-`.
         Without --html the note has only the title.
+        Saves locally, run nb sync after the last write to send changes to iCloud.
 
         EXAMPLES
           nb new --folder Work --title "Plan" --html body.html
@@ -35,6 +36,7 @@ struct Remove: ParsableCommand {
         abstract: "Delete a note (moves it to Recently Deleted)",
         discussion: """
         The note goes to Recently Deleted in Notes and can be restored there.
+        Saves locally, run nb sync after the last write to send changes to iCloud.
 
         EXAMPLE
           nb rm <id>
@@ -56,6 +58,7 @@ struct Move: ParsableCommand {
         abstract: "Move a note to another folder",
         discussion: """
         Moves the note to an existing folder. The note id stays the same.
+        Saves locally, run nb sync after the last write to send changes to iCloud.
 
         EXAMPLE
           nb mv <id> --folder Archive
@@ -92,7 +95,7 @@ struct Pin: ParsableCommand {
     @OptionGroup var note: LocalNoteOptions
     static let configuration = CommandConfiguration(
         abstract: "Pin a note in its folder",
-        discussion: "Repeating pin keeps the note pinned. Content stays unchanged. Example: nb pin <id>"
+        discussion: "Repeating pin keeps the note pinned. Content stays unchanged. This command syncs on its own and waits for iCloud, the pin state lives there. Example: nb pin <id>"
     )
 
     func run() throws {
@@ -105,7 +108,7 @@ struct Unpin: ParsableCommand {
     @OptionGroup var note: LocalNoteOptions
     static let configuration = CommandConfiguration(
         abstract: "Unpin a note in its folder",
-        discussion: "Repeating unpin keeps the note unpinned. Content stays unchanged. Example: nb unpin <id>"
+        discussion: "Repeating unpin keeps the note unpinned. Content stays unchanged. This command syncs on its own and waits for iCloud, the pin state lives there. Example: nb unpin <id>"
     )
 
     func run() throws {
@@ -120,6 +123,7 @@ struct Append: ParsableCommand {
         discussion: """
         Reads the current HTML body, adds your HTML at the end and writes the body back.
         Refuses on attachments, links, tags, checklists and shared notes. Prefer insert for native text edits.
+        Saves locally, run nb sync after the last write to send changes to iCloud.
 
         EXAMPLE
           echo '<p>Done</p>' | nb append <id> --html -
@@ -143,6 +147,7 @@ struct Replace: ParsableCommand {
         Finds a text fragment in the HTML body (see `show --html`) and replaces it. The rest of the note stays as it is.
         Fails if the fragment is missing, or occurs more than once unless --all is set.
         Refuses on attachments, links, tags, checklists and shared notes. Prefer edit for native text edits.
+        Saves locally, run nb sync after the last write to send changes to iCloud.
 
         EXAMPLES
           nb replace <id> --find "OLD" --with "NEW"
@@ -174,6 +179,7 @@ struct Attach: ParsableCommand {
         Adds the file to the end of the note, for example a PDF. Notes shows it inline.
         Works on notes that already have attachments, and does not change the text.
         Prints the note UUID after saving. Notes quits automatically before writing.
+        Saves locally, run nb sync after the last write to send changes to iCloud.
 
         EXAMPLE
           nb attach <id> report.pdf

@@ -6,7 +6,7 @@ Read, search, edit and organize Apple Notes from the terminal.
 The executable is named `nb`.
 Uses this Mac's existing Notes account. No separate login or AppleScript.
 
-Writes sync automatically with iCloud. Notes runs hidden during synchronization and exits afterward.
+Writes save locally and return at once. Run `nb sync` once after the last write: Notes runs hidden during synchronization and exits afterward.
 
 ## Install
 
@@ -78,7 +78,7 @@ Tools cover the CLI commands, including search, folders, pin, attachments, backu
 Each tool describes its parameters. Names use underscores, for example `attachments_export` and `table_set`.
 Call `help` with a tool name for full command help. Results contain structured JSON and the same data as the CLI.
 Set `html` or `csv` to `-` and pass text in `stdin` to avoid creating input files.
-Requests run one at a time. Writes use automatic synchronization. Only `open` displays Notes.
+Requests run one at a time. Writes save locally, the `sync` tool sends them to iCloud. Only `open` displays Notes.
 Stdio needs no port, token, Node.js or separate server executable.
 
 ## Try editing
@@ -92,10 +92,11 @@ note=$(nb new --folder "CLI Demo" --title "Project plan")
 nb insert "$note" --text "Draft budget"
 nb edit "$note" --find "Draft" --with "Final"
 nb show "$note"
+nb sync
 ```
 
-Check each exit code before continuing. A failed sync can leave a successful local write.
-Inspect saved state and retry `sync`, not `new`.
+Check each exit code before continuing. Writes exit 0 after the local save and print `run nb sync` to stderr.
+A failed `sync` keeps the local writes. Inspect saved state and retry `sync`, not `new`.
 
 ## Commands
 
@@ -141,7 +142,7 @@ Moves preserve note IDs and contents. `rm` moves notes to Recently Deleted.
 
 Pin a note with `nb pin "$note"`. Remove its pin with `nb unpin "$note"`.
 Both commands read the pin again after synchronization. If iCloud overwrote it, they write it again up to 3 times, then return an error.
-Repeated commands keep the requested state. Both sync automatically and preserve note contents.
+Repeated commands keep the requested state. Both sync on their own, the pin state lives in iCloud, and preserve note contents.
 Use `nb inspect "$note" --json` to read the `pinned` field.
 
 ## Folder statistics
@@ -253,13 +254,13 @@ Invalid commands return a nonzero exit code and a help hint. Synchronization fai
 No matches produce empty search stdout. Text search reports returned and total matches in stderr, including zero results.
 Text lists report their note count in stderr. Saved actions report their action and destination there.
 JSON actions include `action`, `saved` and the affected object's data. Folder creation includes its initial counts.
-`saved` means saved locally. Exit code 0 confirms synchronization. Use `inspect` or `sync --status` for current cloud status.
+`saved` means saved locally. Exit code 0 of a write confirms the local save, exit code 0 of `sync` confirms iCloud acknowledgement. Use `inspect` or `sync --status` for current cloud status.
 Progress and errors use stderr. JSON import returns `notes` and `summary`.
 
 Before writes, the CLI closes Notes normally. Do not open Notes or run another writer during a write.
 If database access is denied, check the calling application's Full Disk Access.
-Saved writes wait up to 120 seconds for iCloud acknowledgement, then recheck the queue after Notes exits.
-There is no sync bypass flag. Readers and `sync --status` do not launch or close Notes. `open` explicitly launches Notes.
+`sync` waits for iCloud acknowledgement and gives up after 120 seconds without progress, then rechecks the queue after Notes exits.
+Many queued changes sync in 1 run. Readers and `sync --status` do not launch or close Notes. `open` explicitly launches Notes.
 Acknowledgement is not proof that another device has displayed the change.
 
 Snapshots include database records and committed WAL data, but not attachment files.

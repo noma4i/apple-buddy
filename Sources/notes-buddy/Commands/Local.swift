@@ -54,7 +54,7 @@ struct Inspect: ParsableCommand {
 
 struct Edit: ParsableCommand {
     @OptionGroup var output: OutputOptions
-    static let configuration = CommandConfiguration(abstract: "Replace visible text while preserving attachments and formatting", discussion: "Matches literal visible text, not HTML. Missing or ambiguous matches fail without saving. Use --all for every match. Cannot match across object markers. Example: nb edit <id> --find draft --with final")
+    static let configuration = CommandConfiguration(abstract: "Replace visible text while preserving attachments and formatting", discussion: "Matches literal visible text, not HTML. Missing or ambiguous matches fail without saving. Use --all for every match. Cannot match across object markers. Saves locally, run nb sync after the last write to send changes to iCloud. Example: nb edit <id> --find draft --with final")
     @OptionGroup var note: LocalNoteOptions
     @Option(help: "Exact visible text to find") var find: String
     @Option(name: .customLong("with"), help: "Replacement text") var replacement: String
@@ -68,7 +68,7 @@ struct Edit: ParsableCommand {
 
 struct Insert: ParsableCommand {
     @OptionGroup var output: OutputOptions
-    static let configuration = CommandConfiguration(abstract: "Insert visible text at an anchor, or append it", discussion: "Without an anchor, appends plain text. --before and --after require one exact match and cannot be combined. Example: nb insert <id> --text 'See also: ' --after Summary")
+    static let configuration = CommandConfiguration(abstract: "Insert visible text at an anchor, or append it", discussion: "Without an anchor, appends plain text. --before and --after require one exact match and cannot be combined. Saves locally, run nb sync after the last write to send changes to iCloud. Example: nb insert <id> --text 'See also: ' --after Summary")
     @OptionGroup var note: LocalNoteOptions
     @OptionGroup var position: PositionOptions
     @Option(help: "Text to insert") var text: String
@@ -82,7 +82,7 @@ struct Insert: ParsableCommand {
 
 struct Format: ParsableCommand {
     @OptionGroup var output: OutputOptions
-    static let configuration = CommandConfiguration(abstract: "Format selected text or its paragraphs, including checklists", discussion: "Inline styles affect selected text. Paragraph styles affect each selected paragraph. --off removes an inline style. --style body removes lists or headings. Checklist items are unchecked unless --checked is set. Example: nb format <id> --find 'Buy milk' --style checklist --checked")
+    static let configuration = CommandConfiguration(abstract: "Format selected text or its paragraphs, including checklists", discussion: "Inline styles affect selected text. Paragraph styles affect each selected paragraph. --off removes an inline style. --style body removes lists or headings. Checklist items are unchecked unless --checked is set. Saves locally, run nb sync after the last write to send changes to iCloud. Example: nb format <id> --find 'Buy milk' --style checklist --checked")
     @OptionGroup var note: LocalNoteOptions
     @Option(help: "Exact visible text to select") var find: String
     @Option(help: "bold, italic, underline, strikethrough, title, heading, subheading, body, monospace, bullet, numbered, checklist") var style: String
@@ -97,7 +97,7 @@ struct Format: ParsableCommand {
 
 struct Tags: ParsableCommand {
     @OptionGroup var output: OutputOptions
-    static let configuration = CommandConfiguration(abstract: "List, add or remove native tags on a note", discussion: "Without --add or --remove, lists tags. Add --json for structured data. Separate names with slashes, commas or whitespace. Each name becomes a distinct native tag, not text. Duplicates are ignored. Invalid names reject the whole batch. --remove uses the same separators and affects only this note. Search with ls --tag. Example: nb tags <id> --add 'invoices/tech,other'")
+    static let configuration = CommandConfiguration(abstract: "List, add or remove native tags on a note", discussion: "Without --add or --remove, lists tags. Add --json for structured data. Separate names with slashes, commas or whitespace. Each name becomes a distinct native tag, not text. Duplicates are ignored. Invalid names reject the whole batch. --remove uses the same separators and affects only this note. Search with ls --tag. Saves locally, run nb sync after the last write to send changes to iCloud. Example: nb tags <id> --add 'invoices/tech,other'")
     @OptionGroup var note: LocalNoteOptions
     @Option(help: ArgumentHelp("Native tags to add, \(ReferenceHelp.tag), separated by slash, comma or whitespace")) var add: String?
     @Option(help: ArgumentHelp("Native tags to remove, \(ReferenceHelp.tag) or tag id, separated by slash, comma or whitespace")) var remove: String?
@@ -126,6 +126,7 @@ struct Attachments: ParsableCommand {
     static let configuration = CommandConfiguration(abstract: "List, export, add, remove, replace, move or resize note attachments", discussion: """
         Get attachment ids with ls. Export before rm to keep a copy.
         Edits print the note UUID. Export prints the saved path.
+        Saves locally, run nb sync after the last write to send changes to iCloud.
 
         EXAMPLES
           nb attachments ls <id>
@@ -253,6 +254,7 @@ struct Links: ParsableCommand {
     static let configuration = CommandConfiguration(abstract: "Create, list and remove native cross-references between notes", discussion: """
         Links are one-way. Get link ids with ls.
         rm removes the link, not the target note.
+        Saves locally, run nb sync after the last write to send changes to iCloud.
 
         EXAMPLES
           nb links add <source-id> --to <target-id>

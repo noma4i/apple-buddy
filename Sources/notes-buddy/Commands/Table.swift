@@ -13,6 +13,7 @@ struct Tables: ParsableCommand {
         discussion: """
         Rows, columns and tables are counted from 1, left to right and top to bottom.
         Edits the native table while preserving attachments, links and tags.
+        Saves locally, run nb sync after the last write to send changes to iCloud.
 
         EXAMPLES
           nb table new <id> --csv data.csv
@@ -65,6 +66,7 @@ struct TableNew: ParsableCommand {
         discussion: """
         Fill the table from a CSV file, or from stdin with `-`, or create an empty
         grid with --size ROWSxCOLUMNS. Give exactly one of the two.
+        Saves locally, run nb sync after the last write to send changes to iCloud.
 
         EXAMPLES
           nb table new <id> --csv data.csv
@@ -100,6 +102,7 @@ struct TableSet: ParsableCommand {
         abstract: "Change the text of one cell",
         discussion: """
         Replaces the whole text of the cell. Other cells and the rest of the note stay as they are.
+        Saves locally, run nb sync after the last write to send changes to iCloud.
 
         EXAMPLE
           nb table set <id> --row 2 --col 1 --value "Done"
@@ -124,6 +127,7 @@ struct TableAddRow: ParsableCommand {
         abstract: "Insert an empty row",
         discussion: """
         Without --at the row goes to the end. With --at N it becomes row N.
+        Saves locally, run nb sync after the last write to send changes to iCloud.
 
         EXAMPLE
           nb table add-row <id> --at 2
@@ -146,6 +150,7 @@ struct TableRemoveRow: ParsableCommand {
         abstract: "Delete a row",
         discussion: """
         Refuses to delete the only row of a table.
+        Saves locally, run nb sync after the last write to send changes to iCloud.
 
         EXAMPLE
           nb table rm-row <id> --row 3
@@ -168,6 +173,7 @@ struct TableAddColumn: ParsableCommand {
         abstract: "Insert an empty column",
         discussion: """
         Without --at the column goes to the end. With --at N it becomes column N.
+        Saves locally, run nb sync after the last write to send changes to iCloud.
 
         EXAMPLE
           nb table add-col <id> --at 1
@@ -190,6 +196,7 @@ struct TableRemoveColumn: ParsableCommand {
         abstract: "Delete a column",
         discussion: """
         Refuses to delete the only column of a table.
+        Saves locally, run nb sync after the last write to send changes to iCloud.
 
         EXAMPLE
           nb table rm-col <id> --col 2

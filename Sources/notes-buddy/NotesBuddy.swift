@@ -38,10 +38,6 @@ struct NotesBuddy: ParsableCommand {
             if exitCode(for: error) == .success { print(positionalHelp(fullMessage(for: error))) }
             else { failure = error }
         }
-        if NBCommittedCommandWrites() > synchronizedWrites {
-            do { _ = try synchronizeNotes() }
-            catch { if failure == nil { failure = error } else { FileHandle.standardError.write(Data("Sync request failed: \(error)\n".utf8)) } }
-        }
         if let failure {
             FileHandle.standardError.write(Data((inputErrorMessage(fullMessage(for: failure)) + "\n").utf8))
             Darwin.exit(exitCode(for: failure).rawValue)

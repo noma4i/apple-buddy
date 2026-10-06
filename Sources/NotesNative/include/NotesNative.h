@@ -5,7 +5,6 @@
 NS_ASSUME_NONNULL_BEGIN
 
 FOUNDATION_EXPORT NSString * _Nullable NBReadDocumentText(NSURL *url, NSError **error);
-FOUNDATION_EXPORT NSUInteger NBCommittedCommandWrites(void);
 FOUNDATION_EXPORT NSWorkspaceOpenConfiguration * _Nullable NBNotesBackgroundConfiguration(NSError **error);
 FOUNDATION_EXPORT BOOL NBStartNotesSyncSignals(NSError **error);
 FOUNDATION_EXPORT void NBStopNotesSyncSignals(void);

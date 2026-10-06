@@ -8,6 +8,7 @@ struct MakeFolder: ParsableCommand {
         abstract: "Create a folder and print its id",
         discussion: """
         Creates a folder in the sole Notes account, or within --parent. Names must be unique among siblings.
+        Saves locally, run nb sync after the last write to send changes to iCloud.
 
         EXAMPLE
           nb mkfolder Work
@@ -32,6 +33,7 @@ struct RemoveFolder: ParsableCommand {
         abstract: "Delete an empty folder",
         discussion: """
         Refuses to delete a folder that still has notes. Remove them with `rm` or move them with `mv` first.
+        Saves locally, run nb sync after the last write to send changes to iCloud.
 
         EXAMPLE
           nb rmfolder Work

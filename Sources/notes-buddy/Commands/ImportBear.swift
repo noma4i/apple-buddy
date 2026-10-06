@@ -151,6 +151,7 @@ struct ImportBear: ParsableCommand {
         Imports notes, files and tags into folders matching Bear tag paths. Requires pandoc.
         Reruns skip existing imports. Bear data is never modified.
         Try --dry-run first. Progress uses stderr. Saved note UUIDs use stdout.
+        Saves locally, run nb sync after the last write to send changes to iCloud.
 
         EXAMPLES
           nb import-bear --dry-run

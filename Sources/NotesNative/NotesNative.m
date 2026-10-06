@@ -10,11 +10,9 @@
 #import <signal.h>
 #import <errno.h>
 
-static NSUInteger NBWriteCount;
 static const int NBSyncSignals[] = {SIGINT, SIGTERM, SIGHUP};
 static struct sigaction NBPreviousSyncSignals[3];
 static volatile sig_atomic_t NBSyncInterruption;
-NSUInteger NBCommittedCommandWrites(void) { return NBWriteCount; }
 
 static NSString *NBSearchText(NSString *text) {
     NSString *spaces = [text stringByReplacingOccurrencesOfString:@"\\s+" withString:@" " options:NSRegularExpressionSearch range:NSMakeRange(0, text.length)];
@@ -309,7 +307,7 @@ static void NBRequire(BOOL valid, NSString *message) {
             [self insertAttachment:created intoDocument:document replacingToken:token];
         }
         [self saveNote:note];
-        if (![self commitChanges:error]) return nil;
+        if (![self saveChanges:error]) return nil;
         return @{@"id":note.objectID.URIRepresentation.absoluteString, @"imported":@YES};
     } @catch (NSException *exception) { [_context rollback]; if (error) *error = NBError(exception.reason); return nil; }
 }
@@ -333,12 +331,6 @@ static void NBRequire(BOOL valid, NSString *message) {
         }
         return result;
     } @catch (NSException *exception) { if (error) *error = NBError(exception.reason); return nil; }
-}
-
-- (BOOL)commitChanges:(NSError **)error {
-    if (![self saveChanges:error]) return NO;
-    if (_liveStore) NBWriteCount++;
-    return YES;
 }
 
 - (BOOL)isProtectedOrShared:(NSManagedObject *)object {
@@ -442,7 +434,7 @@ static void NBRequire(BOOL valid, NSString *message) {
                 changed = YES;
             }
         }
-        return !changed || [self commitChanges:error];
+        return !changed || [self saveChanges:error];
     } @catch (NSException *exception) { [_context rollback]; if (error) *error = NBError(exception.reason); return NO; }
 }
 
@@ -651,7 +643,7 @@ static void NBRequire(BOOL valid, NSString *message) {
         NSManagedObject *created = parent ? [NSClassFromString(@"ICFolder") newFolderWithIdentifier:NSUUID.UUID.UUIDString parentFolder:parent] : [NSClassFromString(@"ICFolder") newFolderWithIdentifier:NSUUID.UUID.UUIDString account:account];
         NBRequire(created != nil, @"Notes could not create the folder");
         [created setValue:name forKey:@"title"];
-        if (![self commitChanges:error]) return nil;
+        if (![self saveChanges:error]) return nil;
         return created.objectID.URIRepresentation.absoluteString;
     } @catch (NSException *exception) { [_context rollback]; if (error) *error = NBError(exception.reason); return nil; }
 }
@@ -664,7 +656,7 @@ static void NBRequire(BOOL valid, NSString *message) {
         NBRequire([self notesForReadingInFolder:reference tag:nil].count == 0, @"Folder has notes, move or remove them first");
         for (NSManagedObject *other in [NSClassFromString(@"ICFolder") visibleFoldersInContext:_context]) NBRequire(![[other parentFolder] isEqual:folder], @"Folder has subfolders, remove them first");
         [NSClassFromString(@"ICFolder") deleteFolder:folder];
-        return [self commitChanges:error];
+        return [self saveChanges:error];
     } @catch (NSException *exception) { [_context rollback]; if (error) *error = NBError(exception.reason); return NO; }
 }
 
@@ -693,7 +685,7 @@ static void NBRequire(BOOL valid, NSString *message) {
     @try {
         [self requireWritable];
         NSManagedObject *note = [self newNoteInFolder:reference html:html identifier:NSUUID.UUID.UUIDString];
-        if (![self commitChanges:error]) return nil;
+        if (![self saveChanges:error]) return nil;
         return note.objectID.URIRepresentation.absoluteString;
     } @catch (NSException *exception) { [_context rollback]; if (error) *error = NBError(exception.reason); return nil; }
 }
@@ -708,7 +700,7 @@ static void NBRequire(BOOL valid, NSString *message) {
         NBRequire(![[folder valueForKey:@"isSharedViaICloud"] boolValue] && ![[folder valueForKey:@"isTrashFolder"] boolValue] && ![[folder valueForKey:@"isSmartFolder"] boolValue], @"Target folder cannot be shared, smart or deleted");
         NBRequire([[note valueForKey:@"account"] isEqual:[folder valueForKey:@"account"]], @"Moving notes between accounts is not supported");
         [self changeFolder:folder forNote:note];
-        return [self commitChanges:error];
+        return [self saveChanges:error];
     } @catch (NSException *exception) { [_context rollback]; if (error) *error = NBError(exception.reason); return NO; }
 }
 
@@ -722,7 +714,7 @@ static void NBRequire(BOOL valid, NSString *message) {
         if (![account trashFolder]) [account createTrashFolder];
         NBRequire([account trashFolder] != nil, @"Notes has no Recently Deleted folder");
         [self changeFolder:[account trashFolder] forNote:note];
-        return [self commitChanges:error];
+        return [self saveChanges:error];
     } @catch (NSException *exception) { [_context rollback]; if (error) *error = NBError(exception.reason); return NO; }
 }
 
@@ -756,7 +748,7 @@ static void NBRequire(BOOL valid, NSString *message) {
         if (!note) return NO;
         NBRequire([[self describeNote:note][@"canRewriteHTML"] boolValue], @"HTML rewrite would lose objects or checklist state, use edit, insert, format or table");
         [self writeHTML:html toNote:note];
-        return [self commitChanges:error];
+        return [self saveChanges:error];
     } @catch (NSException *exception) { [_context rollback]; if (error) *error = NBError(exception.reason); return NO; }
 }
 
@@ -1402,7 +1394,7 @@ static void NBRequire(BOOL valid, NSString *message) {
         NSManagedObject *note = [self note:identifier error:error];
         if (!note) return nil;
         NSDictionary *result = [self changeNote:note operation:operation options:options error:error];
-        if (!result || ![self commitChanges:error]) { [_context rollback]; return nil; }
+        if (!result || ![self saveChanges:error]) { [_context rollback]; return nil; }
         return [self readNote:identifier error:error];
     } @catch (NSException *exception) { [_context rollback]; if (error) *error = NBError(exception.reason); return nil; }
 }

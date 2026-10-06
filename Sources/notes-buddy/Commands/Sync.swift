@@ -35,10 +35,7 @@ func requestNotesSync() throws -> NSRunningApplication {
     return launchedApplication
 }
 
-var synchronizedWrites: UInt = 0
-
 func synchronizeNotes() throws -> [AnyHashable: Any] {
-    synchronizedWrites = NBCommittedCommandWrites()
     var signalError: NSError?
     guard NBStartNotesSyncSignals(&signalError) else {
         throw signalError ?? NotesError(description: "Cannot register Notes sync interruption signals")
@@ -63,7 +60,8 @@ func synchronizeNotes() throws -> [AnyHashable: Any] {
 }
 
 func waitForNotesSync(_ application: NSRunningApplication) throws -> [AnyHashable: Any] {
-    let deadline = Date().addingTimeInterval(120)
+    var deadline = Date().addingTimeInterval(120)
+    var lastPending = Int.max
     while true {
         let interruption = NBNotesSyncInterruption()
         guard interruption == 0 else { throw NotesError(description: "Notes sync interrupted by signal \(interruption), local changes remain saved and queued") }
@@ -71,7 +69,8 @@ func waitForNotesSync(_ application: NSRunningApplication) throws -> [AnyHashabl
         let state = try autoreleasepool { try openLocalNotes(readOnly: true).cloudStatus() }
         guard let pending = state["pendingObjects"] as? Int else { throw NotesError(description: "Cannot read cloud acknowledgement status, local changes remain saved") }
         if pending == 0 { return state }
-        if Date() >= deadline { throw NotesError(description: "Cloud acknowledgement timed out after 120 seconds, local changes remain saved and queued") }
+        if pending < lastPending { lastPending = pending; deadline = Date().addingTimeInterval(120) }
+        if Date() >= deadline { throw NotesError(description: "Cloud acknowledgement made no progress for 120 seconds, local changes remain saved and queued") }
         FileHandle.standardError.write(Data("Pending cloud objects: \(pending)\n".utf8))
         RunLoop.current.run(until: Date().addingTimeInterval(2))
     }
@@ -80,8 +79,11 @@ func waitForNotesSync(_ application: NSRunningApplication) throws -> [AnyHashabl
 struct Sync: ParsableCommand {
     @OptionGroup var output: OutputOptions
     static let configuration = CommandConfiguration(abstract: "Synchronize saved changes with iCloud", discussion: """
-        Writes sync automatically. Notes stays hidden and exits when finished.
-        Success confirms iCloud acknowledgement. A timeout leaves changes saved for retry.
+        Writes save locally and do not sync. Run sync once after the last write.
+        Notes stays hidden and exits when finished.
+        Success confirms iCloud acknowledgement.
+        The wait ends after 120 seconds without progress, changes stay saved for retry.
+        pin and unpin sync on their own, their state lives in iCloud.
 
         EXAMPLES
           nb sync

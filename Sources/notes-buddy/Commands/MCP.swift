@@ -8,7 +8,7 @@ struct MCPCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "mcp",
         abstract: "Serve CLI tools to agents over MCP stdio",
-        discussion: "Connect an MCP client with command nb and arguments [mcp]. Uses this Mac's Notes account. Tools have typed parameters and descriptions. Writes sync automatically. Stdin and stdout carry MCP messages only. The server exits when the client disconnects."
+        discussion: "Connect an MCP client with command nb and arguments [mcp]. Uses this Mac's Notes account. Tools have typed parameters and descriptions. Writes save locally, call sync once after the last write. Stdin and stdout carry MCP messages only. The server exits when the client disconnects."
     )
 
     func run() throws {
@@ -17,7 +17,7 @@ struct MCPCommand: ParsableCommand {
         guard let executable = Bundle.main.executableURL else { throw ValidationError("Cannot locate the nb executable") }
         let commands = MCPCommands(executable: executable)
         let server = Server(name: "notes-buddy", version: NotesBuddy.releaseVersion,
-                            instructions: "Use search or ls to get note UUIDs. Unique prefixes need at least 8 characters. Folders accept a name, a path such as Work/Project or a UUID from folders. A folder filter in ls, search and stats includes subfolders. ls and search with show return note text in one call, chars caps each text and limit caps the count. Tools return CLI JSON data. Writes wait for iCloud acknowledgement. Only open displays Notes. Export saves local files. Restore creates an isolated copy, never overwrites live Notes. Use help for command details.",
+                            instructions: "Use search or ls to get note UUIDs. Unique prefixes need at least 8 characters. Folders accept a name, a path such as Work/Project or a UUID from folders. A folder filter in ls, search and stats includes subfolders. ls and search with show return note text in one call, chars caps each text and limit caps the count. Tools return CLI JSON data. Writes save locally and return at once. Call sync once after the last write to send changes to iCloud, pin and unpin sync on their own. Only open displays Notes. Export saves local files. Restore creates an isolated copy, never overwrites live Notes. Use help for command details.",
                             capabilities: .init(tools: .init()))
         let completed = DispatchSemaphore(value: 0)
         let outcome = MCPCompletion()

@@ -228,19 +228,23 @@ final class HelpTests: XCTestCase {
         }
     }
 
-    func testWritesAlwaysExplainCloudAcknowledgement() throws {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: ".build/debug/nb")
-        process.arguments = ["sync", "help"]
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        try process.run()
-        let output = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-        process.waitUntilExit()
-        XCTAssertEqual(process.terminationStatus, 0)
-        XCTAssertFalse(output.contains("--no-sync"))
-        XCTAssertTrue(output.contains("Writes sync automatically"))
-        XCTAssertTrue(output.contains("Success confirms iCloud acknowledgement"))
+    func testWritesSaveLocallyAndSyncSendsThemLater() throws {
+        let (code, sync) = try output(["sync", "help"])
+        XCTAssertEqual(code, 0)
+        XCTAssertFalse(sync.contains("--no-sync"))
+        XCTAssertFalse(sync.contains("Writes sync automatically"), sync)
+        XCTAssertTrue(sync.contains("Writes save locally and do not sync"), sync)
+        XCTAssertTrue(sync.contains("Run sync once after the last write"), sync)
+        XCTAssertTrue(sync.contains("Success confirms iCloud acknowledgement"), sync)
+        for command in ["mv", "new", "rm", "mkfolder", "import-bear"] {
+            let (code, text) = try output([command, "help"])
+            XCTAssertEqual(code, 0, text)
+            XCTAssertTrue(text.contains("run nb sync"), "\(command)\n\(text)")
+        }
+        for command in ["pin", "unpin"] {
+            let (_, text) = try output([command, "help"])
+            XCTAssertTrue(text.contains("syncs on its own"), "\(command)\n\(text)")
+        }
     }
 
     func testEveryCommandHasItsOwnUsageHelp() throws {

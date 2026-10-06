@@ -37,6 +37,9 @@ struct OutputOptions: ParsableArguments {
         guard let id = result["id"] as? String else { throw NotesError(description: "Notes returned no action UUID") }
         try write(result, text: id)
         summary(actionSummary(result))
+        if !json, let pending = try openLocalNotes(readOnly: true).cloudStatus()["pendingObjects"] as? Int, pending > 0 {
+            summary("Saved locally, run nb sync to send it to iCloud")
+        }
     }
 
     func summary(_ text: String) {
