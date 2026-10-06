@@ -108,6 +108,16 @@ final class MCPTests: XCTestCase {
         XCTAssertEqual(notes.types["chars"], "integer")
         XCTAssertEqual(notes.types["show"], "boolean")
         XCTAssertTrue(try NotesBuddy.parseAsRoot(try notes.invocation(["folder": "Work", "show": true, "chars": 100, "limit": 3], definitions: definitions).arguments) is List)
+        let moveNotes = try XCTUnwrap(definitions.first { $0.tool.name == "mv" })
+        XCTAssertEqual(moveNotes.types["ids"], "array")
+        XCTAssertNil(moveNotes.types["stdin"])
+        let batch = try moveNotes.invocation(["ids": ["4B34F396", "5C45A4A7"], "folder": "Work"], definitions: definitions)
+        XCTAssertEqual(batch.arguments, ["mv", "--json", "--folder=Work", "--", "4B34F396", "5C45A4A7"])
+        XCTAssertThrowsError(try moveNotes.invocation(["ids": "4B34F396", "folder": "Work"], definitions: definitions))
+        let tags = try XCTUnwrap(definitions.first { $0.tool.name == "tags" })
+        XCTAssertEqual(tags.types["ids"], "array")
+        XCTAssertTrue(try NotesBuddy.parseAsRoot(try tags.invocation(["rename": "a", "to": "b"], definitions: definitions).arguments) is Tags)
+        for name in ["mvfolder", "renamefolder", "dups"] { XCTAssertNotNil(definitions.first { $0.tool.name == name }, name) }
     }
 
     func testOpenCommandAcceptsUUIDPrefixesAndHasHelp() throws {

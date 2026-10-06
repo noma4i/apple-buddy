@@ -114,16 +114,17 @@ nb attachments export help
 | Read notes | `ls`, `show`, `inspect` |
 | Open in Notes | `open` |
 | Find notes | `search` |
-| Create, move, delete | `new`, `mv`, `rm` |
+| Create, move, delete | `new`, `mv`, `rm`. `mv` and `rm` take many ids or `-` for ids from stdin |
 | Pin or unpin | `pin`, `unpin` |
-| Manage folders | `folders`, `mkfolder`, `rmfolder` |
+| Manage folders | `folders`, `folders --tree`, `mkfolder`, `mvfolder`, `renamefolder`, `rmfolder`, `rmfolder --empty` |
 | Count notes and folders | `stats` |
 | Edit visible text | `edit`, `insert` |
 | Edit HTML without native objects | `append`, `replace` |
 | Apply styles or checklists | `format` |
 | Edit tables | `table` with `ls`, `new`, `set`, `add-row`, `rm-row`, `add-col`, `rm-col` |
 | Manage files | `attachments` with `ls`, `add`, `export`, `replace`, `mv`, `rm`, `view`. `attach` also adds files |
-| Manage native tags | `tags` |
+| Manage native tags | `tags`: list with counts, add or remove on many notes, `--rename`, remove everywhere |
+| Find duplicates | `dups` |
 | Link notes | `links` with `ls`, `add`, `rm` |
 | Import Bear | `import-bear` |
 | Copy database records | `snapshot-db` |
@@ -138,6 +139,32 @@ An exact path wins over a name. Use a path or UUID when several folders share a 
 An attachment is selected by UUID, unique prefix or file name. A tag is written with or without `#`.
 Actions reject options that they do not use. For example, `attachments ls` does not accept `--file`.
 Moves preserve note IDs and contents. `rm` moves notes to Recently Deleted.
+
+## Bulk changes
+
+```sh
+nb ls --folder Inbox | nb mv - --folder Archive
+nb rm <id> <id>
+nb mvfolder Work/Old --parent Archive
+nb renamefolder Archive/Old --name "Old projects"
+nb rmfolder Archive --empty
+nb tags
+nb tags <id> <id> --add review
+nb tags --remove draft
+nb tags --rename draft --to review
+nb dups --folder Work
+nb folders --tree
+nb ls --folder Work --long --no-recursive
+```
+
+A batch is checked before any change and saved once: 1 refusal cancels the whole batch.
+`rmfolder --empty` deletes every folder of the subtree without notes, deepest first, and keeps folders with notes.
+`tags` without ids lists every tag with its note count. `tags --remove` without ids takes the tag off every note.
+`dups` groups notes with identical text, table cells included, and identical attachment files by SHA-256.
+`folders --json` has `totalNoteCount`, `totalDeletedNoteCount` and `parentPath` next to the direct counts.
+`ls --long` prints `uuid`, `modified`, `folderPath` and `title` separated by tabs. `--no-recursive` reads 1 folder without its subfolders in `ls`, `search` and `stats`.
+`backup --skip-missing` backs up without attachments that have no local file and lists them in stderr, in `skippedAttachments` and in the manifest.
+`sync` reports `sentObjects` and `seconds`, and prints `Sent N objects in T s` to stderr.
 `rmfolder` accepts only empty folders without subfolders.
 
 Pin a note with `nb pin "$note"`. Remove its pin with `nb unpin "$note"`.

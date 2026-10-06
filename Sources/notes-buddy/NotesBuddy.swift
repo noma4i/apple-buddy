@@ -76,7 +76,7 @@ struct NotesBuddy: ParsableCommand {
         commandName: "nb",
         abstract: "Create, edit and organize Apple Notes from the terminal",
         version: releaseVersion,
-        subcommands: [Version.self, Folders.self, MakeFolder.self, RemoveFolder.self, List.self, Stats.self, Show.self, OpenNote.self, Search.self, New.self, Remove.self, Move.self, Pin.self, Unpin.self, Append.self, Replace.self, Attach.self, Tables.self, SnapshotDatabase.self, Backup.self, Restore.self, Inspect.self, Edit.self, Insert.self, Format.self, Tags.self, Links.self, Attachments.self, ImportBear.self, Sync.self, MCPCommand.self]
+        subcommands: [Version.self, Folders.self, MakeFolder.self, RemoveFolder.self, MoveFolder.self, RenameFolder.self, List.self, Duplicates.self, Stats.self, Show.self, OpenNote.self, Search.self, New.self, Remove.self, Move.self, Pin.self, Unpin.self, Append.self, Replace.self, Attach.self, Tables.self, SnapshotDatabase.self, Backup.self, Restore.self, Inspect.self, Edit.self, Insert.self, Format.self, Tags.self, Links.self, Attachments.self, ImportBear.self, Sync.self, MCPCommand.self]
     )
 }
 

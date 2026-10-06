@@ -228,6 +228,28 @@ final class HelpTests: XCTestCase {
         }
     }
 
+    func testBatchAndFolderCommandsExplainThemselves() throws {
+        let (_, ls) = try output(["ls", "help"])
+        XCTAssertTrue(ls.components(separatedBy: "\n").prefix(4).contains("--folder includes subfolders unless --no-recursive is set."), ls)
+        for (command, needles) in [
+            ("mv", ["1 or more notes", "- for ids from stdin", "nb mv - --folder"]),
+            ("rm", ["1 or more notes", "nb rm -"]),
+            ("mvfolder", ["--parent", "--root", "cannot move into itself"]),
+            ("renamefolder", ["--name"]),
+            ("rmfolder", ["--empty", "deepest first"]),
+            ("tags", ["--rename", "--to", "#name<TAB>count", "nb tags <id> <id> --remove"]),
+            ("backup", ["--skip-missing", "skippedAttachments"]),
+            ("dups", ["SHA-256", "--folder"]),
+            ("folders", ["--tree", "totalNoteCount", "parentPath"]),
+            ("sync", ["sentObjects", "Sent N objects"]),
+            ("stats", ["--no-recursive"]),
+        ] {
+            let (code, text) = try output([command, "help"])
+            XCTAssertEqual(code, 0, text)
+            for needle in needles { XCTAssertTrue(text.contains(needle), "\(command): \(needle)\n\(text)") }
+        }
+    }
+
     func testWritesSaveLocallyAndSyncSendsThemLater() throws {
         let (code, sync) = try output(["sync", "help"])
         XCTAssertEqual(code, 0)

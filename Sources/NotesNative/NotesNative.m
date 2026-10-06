@@ -180,6 +180,7 @@ NSString *NBReadDocumentText(NSURL *url, NSError **error) {
 + (NSManagedObject *)newFolderWithIdentifier:(NSString *)identifier parentFolder:(NSManagedObject *)parent;
 + (NSManagedObject *)newEmptyNoteWithIdentifier:(NSString *)identifier folder:(NSManagedObject *)folder;
 + (void)deleteFolder:(NSManagedObject *)folder;
++ (void)renameHashtagsWithStandardizedContent:(NSString *)content newDisplayText:(NSString *)text context:(NSManagedObjectContext *)context;
 + (NSAttributedString *)attributedStringFromHTMLString:(NSString *)html;
 - (NSString *)htmlString;
 - (NSManagedObject *)parentFolder;
@@ -520,15 +521,25 @@ static void NBRequire(BOOL valid, NSString *message) {
                 children[key] = @([children[key] unsignedIntegerValue] + 1);
             }
         }
+        NSMutableDictionary *totals = [NSMutableDictionary dictionary], *deletedTotals = [NSMutableDictionary dictionary];
+        for (NSManagedObject *folder in folders) {
+            NSString *key = folder.objectID.URIRepresentation.absoluteString;
+            NSUInteger depth = 0;
+            for (NSManagedObject *ancestor = folder; ancestor && depth < 64; ancestor = [ancestor parentFolder], depth++) {
+                NSString *ancestorKey = ancestor.objectID.URIRepresentation.absoluteString;
+                totals[ancestorKey] = @([totals[ancestorKey] unsignedIntegerValue] + [counts[key] unsignedIntegerValue]);
+                deletedTotals[ancestorKey] = @([deletedTotals[ancestorKey] unsignedIntegerValue] + [deletedCounts[key] unsignedIntegerValue]);
+            }
+        }
         NSMutableArray *result = [NSMutableArray array];
         for (NSManagedObject *folder in folders) {
             NSString *key = folder.objectID.URIRepresentation.absoluteString;
             NSUInteger noteCount = [counts[key] unsignedIntegerValue];
             NSUInteger deletedCount = [deletedCounts[key] unsignedIntegerValue];
             NSUInteger subfolderCount = [children[key] unsignedIntegerValue];
-            NSMutableDictionary *value = [@{@"id":key, @"name":[folder valueForKey:@"title"] ?: @"", @"path":[self folderPath:folder], @"noteCount":@(noteCount), @"deletedNoteCount":@(deletedCount), @"subfolderCount":@(subfolderCount), @"empty":@((BOOL)(noteCount + deletedCount + subfolderCount == 0))} mutableCopy];
+            NSMutableDictionary *value = [@{@"id":key, @"name":[folder valueForKey:@"title"] ?: @"", @"path":[self folderPath:folder], @"noteCount":@(noteCount), @"deletedNoteCount":@(deletedCount), @"subfolderCount":@(subfolderCount), @"totalNoteCount":totals[key] ?: @0, @"totalDeletedNoteCount":deletedTotals[key] ?: @0, @"empty":@((BOOL)(noteCount + deletedCount + subfolderCount == 0))} mutableCopy];
             NSManagedObject *parent = [folder parentFolder];
-            if (parent) value[@"parent"] = parent.objectID.URIRepresentation.absoluteString;
+            if (parent) { value[@"parent"] = parent.objectID.URIRepresentation.absoluteString; value[@"parentPath"] = [self folderPath:parent]; }
             [result addObject:value];
         }
         return result;
@@ -540,6 +551,10 @@ static void NBRequire(BOOL valid, NSString *message) {
 }
 
 - (NSArray<NSManagedObject *> *)notesForReadingInFolder:(NSString *)reference tag:(NSString *)tag {
+    return [self notesForReadingInFolder:reference tag:tag recursive:YES];
+}
+
+- (NSArray<NSManagedObject *> *)notesForReadingInFolder:(NSString *)reference tag:(NSString *)tag recursive:(BOOL)recursive {
     NSManagedObject *root = reference ? [self folder:reference] : nil;
     BOOL deleted = [[root valueForKey:@"isTrashFolder"] boolValue];
     NSSet *tagged = nil;
@@ -563,7 +578,7 @@ static void NBRequire(BOOL valid, NSString *message) {
         if (root) {
             BOOL inside = NO;
             NSUInteger depth = 0;
-            for (NSManagedObject *folder = [note valueForKey:@"folder"]; folder && !inside && depth < 64; folder = [folder parentFolder], depth++) inside = [folder isEqual:root];
+            for (NSManagedObject *folder = [note valueForKey:@"folder"]; folder && !inside && depth < (recursive ? 64 : 1); folder = [folder parentFolder], depth++) inside = [folder isEqual:root];
             if (!inside) continue;
         }
         [result addObject:note];
@@ -634,7 +649,7 @@ static void NBRequire(BOOL valid, NSString *message) {
 
 - (NSDictionary *)listNotes:(NSDictionary *)options error:(NSError **)error {
     @try {
-        NSArray *notes = [self notesForReadingInFolder:options[@"folder"] tag:options[@"tag"]];
+        NSArray *notes = [self notesForReadingInFolder:options[@"folder"] tag:options[@"tag"] recursive:![options[@"direct"] boolValue]];
         NSMutableArray *result = [NSMutableArray array];
         for (NSManagedObject *note in [self page:notes options:options]) [result addObject:[self readingNote:note options:options]];
         return @{@"notes":result, @"total":@(notes.count)};
@@ -656,15 +671,86 @@ static void NBRequire(BOOL valid, NSString *message) {
             account = accounts.firstObject;
         }
         if (parent) [self refuse:parent flags:@[@"isSharedViaICloud", @"isSmartFolder", @"isTrashFolder"] action:@"be the parent"];
-        for (NSManagedObject *folder in [NSClassFromString(@"ICFolder") visibleFoldersInContext:_context]) {
-            BOOL sameParent = parent ? [[folder parentFolder] isEqual:parent] : [folder parentFolder] == nil;
-            NBRequire(!(sameParent && [[folder valueForKey:@"account"] isEqual:account] && [[folder valueForKey:@"title"] isEqualToString:name]), @"Folder already exists");
-        }
+        [self requireFreeFolderTitle:name parent:parent account:account except:nil];
         NSManagedObject *created = parent ? [NSClassFromString(@"ICFolder") newFolderWithIdentifier:NSUUID.UUID.UUIDString parentFolder:parent] : [NSClassFromString(@"ICFolder") newFolderWithIdentifier:NSUUID.UUID.UUIDString account:account];
         NBRequire(created != nil, @"Notes could not create the folder");
         [created setValue:name forKey:@"title"];
         if (![self saveChanges:error]) return nil;
         return created.objectID.URIRepresentation.absoluteString;
+    } @catch (NSException *exception) { [_context rollback]; if (error) *error = NBError(exception.reason); return nil; }
+}
+
+- (void)requireFreeFolderTitle:(NSString *)name parent:(NSManagedObject *)parent account:(NSManagedObject *)account except:(NSManagedObject *)except {
+    NBRequire([name stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet].length, @"Folder name must not be empty");
+    for (NSManagedObject *folder in [NSClassFromString(@"ICFolder") visibleFoldersInContext:_context]) {
+        if ([folder isEqual:except]) continue;
+        BOOL sameParent = parent ? [[folder parentFolder] isEqual:parent] : [folder parentFolder] == nil;
+        NBRequire(!(sameParent && [[folder valueForKey:@"account"] isEqual:account] && [[folder valueForKey:@"title"] isEqualToString:name]), [NSString stringWithFormat:@"Folder already exists: %@", parent ? [[self folderPath:parent] stringByAppendingFormat:@"/%@", name] : name]);
+    }
+}
+
+- (BOOL)moveFolder:(NSString *)reference toParent:(NSString *)parentReference error:(NSError **)error {
+    @try {
+        [self requireWritable];
+        NSManagedObject *folder = [self folder:reference];
+        [self refuse:folder flags:@[@"isSystemFolder", @"isSharedViaICloud", @"isSmartFolder", @"isTrashFolder"] action:@"be moved"];
+        NSManagedObject *parent = parentReference ? [self folder:parentReference] : nil;
+        if (parent) {
+            [self refuse:parent flags:@[@"isSharedViaICloud", @"isSmartFolder", @"isTrashFolder"] action:@"be the parent"];
+            NBRequire([[parent valueForKey:@"account"] isEqual:[folder valueForKey:@"account"]], @"Moving folders between accounts is not supported");
+            NSUInteger depth = 0;
+            for (NSManagedObject *ancestor = parent; ancestor && depth < 64; ancestor = [ancestor parentFolder], depth++) {
+                NBRequire(![ancestor isEqual:folder], [NSString stringWithFormat:@"Folder %@ cannot be moved into itself", [self publicIdentifierForObject:folder]]);
+            }
+        }
+        NBRequire(folder.entity.relationshipsByName[@"parent"] != nil, @"Notes folders have no parent relationship");
+        [self requireFreeFolderTitle:[folder valueForKey:@"title"] parent:parent account:[folder valueForKey:@"account"] except:folder];
+        [folder setValue:parent forKey:@"parent"];
+        return [self saveChanges:error];
+    } @catch (NSException *exception) { [_context rollback]; if (error) *error = NBError(exception.reason); return NO; }
+}
+
+- (BOOL)renameFolder:(NSString *)reference to:(NSString *)name error:(NSError **)error {
+    @try {
+        [self requireWritable];
+        NSManagedObject *folder = [self folder:reference];
+        [self refuse:folder flags:@[@"isSystemFolder", @"isSharedViaICloud", @"isSmartFolder", @"isTrashFolder"] action:@"be renamed"];
+        [self requireFreeFolderTitle:name parent:[folder parentFolder] account:[folder valueForKey:@"account"] except:folder];
+        [folder setValue:name forKey:@"title"];
+        return [self saveChanges:error];
+    } @catch (NSException *exception) { [_context rollback]; if (error) *error = NBError(exception.reason); return NO; }
+}
+
+- (NSArray<NSDictionary *> *)removeEmptyFolders:(NSString *)reference error:(NSError **)error {
+    @try {
+        [self requireWritable];
+        NSManagedObject *root = [self folder:reference];
+        NSArray *folders = [NSClassFromString(@"ICFolder") visibleFoldersInContext:_context];
+        NSMutableArray *subtree = [NSMutableArray array];
+        for (NSManagedObject *folder in folders) {
+            NSUInteger depth = 0;
+            for (NSManagedObject *ancestor = folder; ancestor && depth < 64; ancestor = [ancestor parentFolder], depth++) {
+                if (![ancestor isEqual:root]) continue;
+                [subtree addObject:@{@"folder":folder, @"depth":@(depth)}];
+                break;
+            }
+        }
+        [subtree sortUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) { return [b[@"depth"] compare:a[@"depth"]]; }];
+        NSMutableSet *removed = [NSMutableSet set];
+        NSMutableArray *result = [NSMutableArray array];
+        for (NSDictionary *entry in subtree) {
+            NSManagedObject *folder = entry[@"folder"];
+            if ([[folder valueForKey:@"isSystemFolder"] boolValue] || [[folder valueForKey:@"isSharedViaICloud"] boolValue] || [[folder valueForKey:@"isSmartFolder"] boolValue]) continue;
+            if ([self notesForReadingInFolder:folder.objectID.URIRepresentation.absoluteString tag:nil recursive:NO].count) continue;
+            BOOL hasChildren = NO;
+            for (NSManagedObject *other in folders) hasChildren = hasChildren || ([[other parentFolder] isEqual:folder] && ![removed containsObject:other]);
+            if (hasChildren) continue;
+            [result addObject:@{@"id":folder.objectID.URIRepresentation.absoluteString, @"path":[self folderPath:folder]}];
+            [removed addObject:folder];
+            [NSClassFromString(@"ICFolder") deleteFolder:folder];
+        }
+        if (![self saveChanges:error]) return nil;
+        return result;
     } @catch (NSException *exception) { [_context rollback]; if (error) *error = NBError(exception.reason); return nil; }
 }
 
@@ -710,32 +796,60 @@ static void NBRequire(BOOL valid, NSString *message) {
     } @catch (NSException *exception) { [_context rollback]; if (error) *error = NBError(exception.reason); return nil; }
 }
 
-- (BOOL)moveNote:(NSString *)identifier toFolder:(NSString *)reference error:(NSError **)error {
-    @try {
-        [self requireWritable];
+- (NSArray<NSManagedObject *> *)notesForReferences:(NSArray<NSString *> *)identifiers error:(NSError **)error {
+    NBRequire(identifiers.count, @"Provide at least one note");
+    NSMutableArray *notes = [NSMutableArray array];
+    for (NSString *identifier in identifiers) {
         NSManagedObject *note = [self note:identifier error:error];
-        if (!note) return NO;
-        NSManagedObject *folder = [self folder:reference];
-        [self refuse:note flags:@[@"isSharedViaICloud", @"isDeletedOrInTrash"] action:@"be moved"];
-        [self refuse:folder flags:@[@"isSharedViaICloud", @"isTrashFolder", @"isSmartFolder"] action:@"be the target"];
-        NBRequire([[note valueForKey:@"account"] isEqual:[folder valueForKey:@"account"]], @"Moving notes between accounts is not supported");
-        [self changeFolder:folder forNote:note];
-        return [self saveChanges:error];
-    } @catch (NSException *exception) { [_context rollback]; if (error) *error = NBError(exception.reason); return NO; }
+        if (!note) return nil;
+        if (![notes containsObject:note]) [notes addObject:note];
+    }
+    return notes;
 }
 
-- (BOOL)deleteNote:(NSString *)identifier error:(NSError **)error {
+- (NSArray<NSDictionary *> *)summariesAfterSave:(NSArray<NSManagedObject *> *)notes error:(NSError **)error {
+    NSMutableArray *objectIDs = [NSMutableArray array];
+    for (NSManagedObject *note in notes) [objectIDs addObject:note.objectID];
+    if (![self saveChanges:error]) return nil;
+    NSMutableArray *result = [NSMutableArray array];
+    for (NSManagedObjectID *objectID in objectIDs) {
+        NSManagedObject *note = [_context existingObjectWithID:objectID error:error];
+        if (!note) return nil;
+        [result addObject:[self summarizeNote:note]];
+    }
+    return result;
+}
+
+- (NSArray<NSDictionary *> *)moveNotesWithIDs:(NSArray<NSString *> *)identifiers toFolder:(NSString *)reference error:(NSError **)error {
     @try {
         [self requireWritable];
-        NSManagedObject *note = [self note:identifier error:error];
-        if (!note) return NO;
-        [self refuse:note flags:@[@"isSharedViaICloud", @"isDeletedOrInTrash"] action:@"be removed"];
-        NSManagedObject *account = [note valueForKey:@"account"];
-        if (![account trashFolder]) [account createTrashFolder];
-        NBRequire([account trashFolder] != nil, @"Notes has no Recently Deleted folder");
-        [self changeFolder:[account trashFolder] forNote:note];
-        return [self saveChanges:error];
-    } @catch (NSException *exception) { [_context rollback]; if (error) *error = NBError(exception.reason); return NO; }
+        NSArray *notes = [self notesForReferences:identifiers error:error];
+        if (!notes) return nil;
+        NSManagedObject *folder = [self folder:reference];
+        [self refuse:folder flags:@[@"isSharedViaICloud", @"isTrashFolder", @"isSmartFolder"] action:@"be the target"];
+        for (NSManagedObject *note in notes) {
+            [self refuse:note flags:@[@"isSharedViaICloud", @"isDeletedOrInTrash"] action:@"be moved"];
+            NBRequire([[note valueForKey:@"account"] isEqual:[folder valueForKey:@"account"]], @"Moving notes between accounts is not supported");
+            [self changeFolder:folder forNote:note];
+        }
+        return [self summariesAfterSave:notes error:error];
+    } @catch (NSException *exception) { [_context rollback]; if (error) *error = NBError(exception.reason); return nil; }
+}
+
+- (NSArray<NSDictionary *> *)trashNotesWithIDs:(NSArray<NSString *> *)identifiers error:(NSError **)error {
+    @try {
+        [self requireWritable];
+        NSArray *notes = [self notesForReferences:identifiers error:error];
+        if (!notes) return nil;
+        for (NSManagedObject *note in notes) {
+            [self refuse:note flags:@[@"isSharedViaICloud", @"isDeletedOrInTrash"] action:@"be removed"];
+            NSManagedObject *account = [note valueForKey:@"account"];
+            if (![account trashFolder]) [account createTrashFolder];
+            NBRequire([account trashFolder] != nil, @"Notes has no Recently Deleted folder");
+            [self changeFolder:[account trashFolder] forNote:note];
+        }
+        return [self summariesAfterSave:notes error:error];
+    } @catch (NSException *exception) { [_context rollback]; if (error) *error = NBError(exception.reason); return nil; }
 }
 
 - (void)changeFolder:(NSManagedObject *)folder forNote:(NSManagedObject *)note {
@@ -870,7 +984,7 @@ static void NBRequire(BOOL valid, NSString *message) {
     }
     NSManagedObject *note = [_context existingObjectWithID:objectID error:error];
     if (!note) return nil;
-    @try { [self refuse:note flags:@[@"isPasswordProtected"] action:@"be read"]; }
+    @try { [self refuse:note flags:@[@"markedForDeletion", @"isPasswordProtected"] action:@"be read"]; }
     @catch (NSException *exception) { if (error) *error = NBError(exception.reason); return nil; }
     return note;
 }
@@ -935,31 +1049,33 @@ static void NBRequire(BOOL valid, NSString *message) {
     return items;
 }
 
-- (NSArray<NSString *> *)backupAttachmentPaths:(NSError **)error {
+- (NSDictionary *)backupAttachments:(NSError **)error {
     @try {
         NSFetchRequest *request = [NSFetchRequest fetchRequestWithEntityName:@"ICNote"];
         request.predicate = [NSPredicate predicateWithFormat:@"markedForDeletion == NO"];
         NSArray *notes = [_context executeFetchRequest:request error:error];
         if (!notes) return nil;
         NSMutableOrderedSet *paths = [NSMutableOrderedSet orderedSet];
+        NSMutableArray *missing = [NSMutableArray array];
         for (NSManagedObject *note in notes) {
             NSMutableSet *attachments = [NSMutableSet set];
             for (id collection in @[[note visibleTopLevelAttachments], [note visibleInlineAttachments]]) {
                 for (NSManagedObject *attachment in collection) [attachments addObject:attachment];
             }
             for (NSManagedObject *attachment in attachments) {
+                if (![attachment respondsToSelector:@selector(fileURL)]) continue;
                 NSURL *file = [attachment fileURL];
                 NSString *type = [attachment valueForKey:@"typeUTI"];
                 BOOL storedDrawing = [attachment isDrawing] && [[attachment valueForKey:@"mergeableData"] length] > 0;
                 BOOL needsFile = !storedDrawing && ([attachment isImage] || [attachment isDrawing] || [attachment isAudio] || [attachment isScannedDocument] || [type isEqualToString:@"com.adobe.pdf"] || [type hasPrefix:@"public."]);
-                NBRequire(!needsFile || file != nil, [NSString stringWithFormat:@"Attachment %@ (%@), note %@, has no local file, no complete backup created", [attachment valueForKey:@"identifier"], type, [note valueForKey:@"identifier"]]);
-                if (file) {
-                    NBRequire([file checkResourceIsReachableAndReturnError:nil], @"A note attachment is unavailable locally, a complete backup is unavailable");
-                    [paths addObject:file.path];
+                if (needsFile && (!file || ![file checkResourceIsReachableAndReturnError:nil])) {
+                    [missing addObject:@{@"attachment":[attachment valueForKey:@"identifier"] ?: @"", @"note":[note valueForKey:@"identifier"] ?: @"", @"type":type ?: @""}];
+                    continue;
                 }
+                if (file && [file checkResourceIsReachableAndReturnError:nil]) [paths addObject:file.path];
             }
         }
-        return paths.array;
+        return @{@"paths":paths.array, @"missing":missing};
     } @catch (NSException *exception) {
         if (error) *error = NBError(exception.reason);
         return nil;
@@ -1253,6 +1369,57 @@ static void NBRequire(BOOL valid, NSString *message) {
     return names;
 }
 
+- (NSArray<NSDictionary *> *)listTags:(NSError **)error {
+    @try {
+        NSMutableDictionary *counts = [NSMutableDictionary dictionary], *names = [NSMutableDictionary dictionary];
+        for (NSManagedObject *note in [self notesForReadingInFolder:nil tag:nil]) {
+            NSMutableSet *seen = [NSMutableSet set];
+            for (NSDictionary *tag in [self tagDetailsForNote:note]) {
+                NSString *display = tag[@"name"];
+                NSString *canonical = [NSClassFromString(@"ICHashtag") standardizedHashtagRepresentationForDisplayText:[display hasPrefix:@"#"] ? [display substringFromIndex:1] : display];
+                if ([seen containsObject:canonical]) continue;
+                [seen addObject:canonical];
+                counts[canonical] = @([counts[canonical] unsignedIntegerValue] + 1);
+                if (!names[canonical]) names[canonical] = display;
+            }
+        }
+        NSMutableArray *result = [NSMutableArray array];
+        for (NSString *canonical in counts) [result addObject:@{@"name":names[canonical], @"noteCount":counts[canonical]}];
+        [result sortUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) {
+            NSComparisonResult byCount = [b[@"noteCount"] compare:a[@"noteCount"]];
+            return byCount != NSOrderedSame ? byCount : [a[@"name"] caseInsensitiveCompare:b[@"name"]];
+        }];
+        return result;
+    } @catch (NSException *exception) { if (error) *error = NBError(exception.reason); return nil; }
+}
+
+- (NSArray<NSDictionary *> *)renameTag:(NSString *)name to:(NSString *)newName error:(NSError **)error {
+    @try {
+        [self requireWritable];
+        NSArray<NSString *> *from = [self tagNames:name], *to = [self tagNames:newName];
+        NBRequire(from.count == 1 && to.count == 1, @"Use 1 tag name for --rename and 1 for --to");
+        NSArray *notes = [self notesForReadingInFolder:nil tag:from.firstObject];
+        NBRequire(notes.count, [NSString stringWithFormat:@"Tag not found: #%@", from.firstObject]);
+        for (NSManagedObject *note in notes) [self refuse:note flags:@[@"isSharedViaICloud", @"isPasswordProtected"] action:@"be changed"];
+        NSString *canonical = [NSClassFromString(@"ICHashtag") standardizedHashtagRepresentationForDisplayText:from.firstObject];
+        [NSClassFromString(@"ICHashtag") renameHashtagsWithStandardizedContent:canonical newDisplayText:to.firstObject context:_context];
+        return [self summariesAfterSave:notes error:error];
+    } @catch (NSException *exception) { [_context rollback]; if (error) *error = NBError(exception.reason); return nil; }
+}
+
+- (NSArray<NSDictionary *> *)editNotes:(NSArray<NSString *> *)identifiers operation:(NSString *)operation options:(NSDictionary *)options error:(NSError **)error {
+    @try {
+        [self requireWritable];
+        NSArray *notes = identifiers ? [self notesForReferences:identifiers error:error] : [self notesForReadingInFolder:nil tag:options[@"name"]];
+        if (!notes) return nil;
+        NBRequire(notes.count, [NSString stringWithFormat:@"Tag not found: #%@", [[self tagNames:options[@"name"]] componentsJoinedByString:@" #"]]);
+        for (NSManagedObject *note in notes) {
+            if (![self changeNote:note operation:operation options:options error:error]) { [_context rollback]; return nil; }
+        }
+        return [self summariesAfterSave:notes error:error];
+    } @catch (NSException *exception) { [_context rollback]; if (error) *error = NBError(exception.reason); return nil; }
+}
+
 - (NSArray<NSString *> *)noteIDsWithTag:(NSString *)tag error:(NSError **)error {
     @try {
         NSMutableArray *ids = [NSMutableArray array];
@@ -1262,6 +1429,55 @@ static void NBRequire(BOOL valid, NSString *message) {
         if (error) *error = NBError(exception.reason);
         return nil;
     }
+}
+
+- (NSString *)plainTextWithTables:(NSManagedObject *)note {
+    NSMutableArray *text = [NSMutableArray arrayWithObject:[[note mergeableString] attributedString].string ?: @""];
+    for (NSManagedObject *attachment in [self attachmentsInNote:note]) {
+        if ([[attachment valueForKey:@"isTable"] boolValue]) {
+            for (NSArray *row in [self tableRowsForAttachment:attachment]) [text addObjectsFromArray:row];
+        }
+    }
+    return [text componentsJoinedByString:@"\n"];
+}
+
+static NSString *NBDigest(NSData *data) {
+    unsigned char digest[CC_SHA256_DIGEST_LENGTH];
+    CC_SHA256(data.bytes, (CC_LONG)data.length, digest);
+    NSMutableString *hex = [NSMutableString string];
+    for (NSUInteger index = 0; index < sizeof(digest); index++) [hex appendFormat:@"%02x", digest[index]];
+    return hex;
+}
+
+- (NSArray<NSDictionary *> *)duplicateGroups:(NSDictionary *)options error:(NSError **)error {
+    @try {
+        NSMutableDictionary *groups = [NSMutableDictionary dictionary];
+        NSMutableArray *order = [NSMutableArray array];
+        for (NSManagedObject *note in [self notesForReadingInFolder:options[@"folder"] tag:nil]) {
+            if ([[note valueForKey:@"isPasswordProtected"] boolValue]) continue;
+            NSString *text = [self plainTextWithTables:note];
+            NSArray *words = [[text stringByReplacingOccurrencesOfString:@"\uFFFC" withString:@""] componentsSeparatedByCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+            NSString *normalized = [[words filteredArrayUsingPredicate:[NSPredicate predicateWithFormat:@"length > 0"]] componentsJoinedByString:@" "];
+            NSMutableArray *files = [NSMutableArray array];
+            for (NSManagedObject *attachment in [self attachmentsInNote:note]) {
+                if ([[attachment valueForKey:@"isTable"] boolValue]) continue;
+                NSURL *file = [attachment fileURL];
+                NSData *data = file ? [NSData dataWithContentsOfURL:file] : nil;
+                [files addObject:data ? NBDigest(data) : [@"unavailable:" stringByAppendingString:[attachment valueForKey:@"identifier"] ?: @""]];
+            }
+            if (!normalized.length && !files.count) continue;
+            [files sortUsingSelector:@selector(compare:)];
+            NSString *key = [NBDigest([normalized dataUsingEncoding:NSUTF8StringEncoding]) stringByAppendingString:[files componentsJoinedByString:@"|"]];
+            if (!groups[key]) { groups[key] = [NSMutableArray array]; [order addObject:key]; }
+            [groups[key] addObject:[self summarizeNote:note]];
+        }
+        NSMutableArray *result = [NSMutableArray array];
+        for (NSString *key in order) {
+            if ([groups[key] count] > 1) [result addObject:@{@"notes":groups[key]}];
+        }
+        [result sortUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) { return [@([b[@"notes"] count]) compare:@([a[@"notes"] count])]; }];
+        return result;
+    } @catch (NSException *exception) { if (error) *error = NBError(exception.reason); return nil; }
 }
 
 - (NSDictionary *)searchNotes:(NSString *)query options:(NSDictionary *)options error:(NSError **)error {
@@ -1283,7 +1499,7 @@ static void NBRequire(BOOL valid, NSString *message) {
         }
         NSRegularExpression *approximate = [NSRegularExpression regularExpressionWithPattern:NBSearchPattern(query) options:NSRegularExpressionCaseInsensitive error:error];
         if (!approximate) return nil;
-        NSArray *notes = [self notesForReadingInFolder:options[@"folder"] tag:nil];
+        NSArray *notes = [self notesForReadingInFolder:options[@"folder"] tag:nil recursive:![options[@"direct"] boolValue]];
         NSMutableArray *records = [NSMutableArray array];
         NSMutableOrderedSet<NSURL *> *files = [NSMutableOrderedSet orderedSet];
         NSUInteger protectedCount = 0;
@@ -1301,15 +1517,7 @@ static void NBRequire(BOOL valid, NSString *message) {
             if (![@[@"id", @"title"] containsObject:field]) {
                 NSArray *attachments = [self attachmentsInNote:note];
                 BOOL all = [field isEqualToString:@"all"];
-                if (all || [field isEqualToString:@"text"]) {
-                    NSMutableArray *text = [NSMutableArray arrayWithObject:[[note mergeableString] attributedString].string ?: @""];
-                    for (NSManagedObject *attachment in attachments) {
-                        if ([[attachment valueForKey:@"isTable"] boolValue]) {
-                            for (NSArray *row in [self tableRowsForAttachment:attachment]) [text addObjectsFromArray:row];
-                        }
-                    }
-                    values[@"text"] = [text componentsJoinedByString:@"\n"];
-                }
+                if (all || [field isEqualToString:@"text"]) values[@"text"] = [self plainTextWithTables:note];
                 if (all || [field isEqualToString:@"attachment"]) {
                     NSMutableArray *names = [NSMutableArray array];
                     for (NSManagedObject *attachment in attachments) [names addObject:[attachment fileURL].lastPathComponent ?: @""];

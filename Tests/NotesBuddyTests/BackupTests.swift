@@ -25,6 +25,12 @@ final class BackupTests: XCTestCase {
         try Data("PDF bytes".utf8).write(to: media.appendingPathComponent("invoice.pdf"))
         try Data("Image bytes".utf8).write(to: media.appendingPathComponent("image.png"))
         try FileManager.default.createDirectory(at: source.appendingPathComponent("empty"), withIntermediateDirectories: false)
+        let scripts = source.appendingPathComponent("Library/Application Scripts")
+        try FileManager.default.createDirectory(at: scripts, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: scripts.appendingPathComponent("group.com.apple.notes"), withDestinationURL: directory)
+        let caches = source.appendingPathComponent("Library/Caches")
+        try FileManager.default.createDirectory(at: caches, withIntermediateDirectories: true)
+        try Data("cache".utf8).write(to: caches.appendingPathComponent("thumb"))
     }
 
     override func tearDownWithError() throws {
@@ -43,6 +49,7 @@ final class BackupTests: XCTestCase {
         guard saved.code == 0 else { return }
         let result = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(saved.text.utf8)) as? [String: Any])
         XCTAssertEqual(result["path"] as? String, backup.path)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: backup.appendingPathComponent("data/Library").path), "the container Library subtree is container plumbing, not note data")
         let recovered = try run(["restore", backup.path, "--to", restored.path])
         XCTAssertEqual(recovered.code, 0, recovered.text)
         XCTAssertEqual(recovered.text.trimmingCharacters(in: .whitespacesAndNewlines), restored.path)

@@ -35,14 +35,19 @@ func requestNotesSync() throws -> NSRunningApplication {
     return launchedApplication
 }
 
+func sentObjects(before: Int, after: Int) -> Int { max(before - after, 0) }
+
 func synchronizeNotes() throws -> [AnyHashable: Any] {
+    let started = Date()
+    let queued = try autoreleasepool { try openLocalNotes(readOnly: true).cloudStatus()["pendingObjects"] as? Int ?? 0 }
     var signalError: NSError?
     guard NBStartNotesSyncSignals(&signalError) else {
         throw signalError ?? NotesError(description: "Cannot register Notes sync interruption signals")
     }
     defer { NBStopNotesSyncSignals() }
+    let previous = NSWorkspace.shared.frontmostApplication
     let application = try requestNotesSync()
-    let result = Result { try waitForNotesSync(application) }
+    let result = Result { try waitForNotesSync(application, previous: previous) }
     do { try quitNotes([application]) }
     catch {
         if case .failure(let syncError) = result {
@@ -52,16 +57,29 @@ func synchronizeNotes() throws -> [AnyHashable: Any] {
         throw error
     }
     _ = try result.get()
-    let state = try autoreleasepool { try openLocalNotes(readOnly: true).cloudStatus() }
-    guard state["pendingObjects"] as? Int == 0 else {
+    var state = try autoreleasepool { try openLocalNotes(readOnly: true).cloudStatus() }
+    guard let pending = state["pendingObjects"] as? Int, pending == 0 else {
         throw NotesError(description: "Notes saved additional changes during shutdown, local changes remain saved and queued")
     }
+    state["sentObjects"] = sentObjects(before: queued, after: pending)
+    state["seconds"] = (Date().timeIntervalSince(started) * 10).rounded() / 10
     return state
 }
 
-func waitForNotesSync(_ application: NSRunningApplication) throws -> [AnyHashable: Any] {
+func keepNotesHidden(_ application: NSRunningApplication, previous: NSRunningApplication?, shown: inout Bool) {
+    guard application.activationPolicy != .prohibited || application.isActive else { return }
+    if !shown {
+        shown = true
+        FileHandle.standardError.write(Data("Notes opened a window during sync, hiding it\n".utf8))
+    }
+    application.hide()
+    if let previous, previous.processIdentifier != application.processIdentifier, !previous.isTerminated { previous.activate() }
+}
+
+func waitForNotesSync(_ application: NSRunningApplication, previous: NSRunningApplication?) throws -> [AnyHashable: Any] {
     var deadline = Date().addingTimeInterval(120)
     var lastPending = Int.max
+    var shown = false
     while true {
         let interruption = NBNotesSyncInterruption()
         guard interruption == 0 else { throw NotesError(description: "Notes sync interrupted by signal \(interruption), local changes remain saved and queued") }
@@ -72,7 +90,11 @@ func waitForNotesSync(_ application: NSRunningApplication) throws -> [AnyHashabl
         if pending < lastPending { lastPending = pending; deadline = Date().addingTimeInterval(120) }
         if Date() >= deadline { throw NotesError(description: "Cloud acknowledgement made no progress for 120 seconds, local changes remain saved and queued") }
         FileHandle.standardError.write(Data("Pending cloud objects: \(pending)\n".utf8))
-        RunLoop.current.run(until: Date().addingTimeInterval(2))
+        let next = Date().addingTimeInterval(2)
+        while Date() < next {
+            keepNotesHidden(application, previous: previous, shown: &shown)
+            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        }
     }
 }
 
@@ -81,7 +103,8 @@ struct Sync: ParsableCommand {
     static let configuration = CommandConfiguration(abstract: "Synchronize saved changes with iCloud", discussion: """
         Writes save locally and do not sync. Run sync once after the last write.
         Notes stays hidden and exits when finished.
-        Success confirms iCloud acknowledgement.
+        Success confirms iCloud acknowledgement. The result has sentObjects and seconds,
+        stderr reports the pending count every 2 seconds and "Sent N objects in T s" at the end.
         The wait ends after 120 seconds without progress, changes stay saved for retry.
         pin and unpin sync on their own, their state lives in iCloud.
 
@@ -93,6 +116,8 @@ struct Sync: ParsableCommand {
 
     func run() throws {
         if status { try output.write(openLocalNotes(readOnly: true).cloudStatus()); return }
-        try output.write(synchronizeNotes())
+        let state = try synchronizeNotes()
+        try output.write(state)
+        output.summary("Sent \(state["sentObjects"] ?? 0) objects in \(state["seconds"] ?? 0) s")
     }
 }

@@ -109,20 +109,21 @@ struct MCPToolCommand {
         var required: [Value] = []
         for argument in arguments {
             guard let name = argument.valueName else { continue }
-            let type = argument.kind == .flag ? "boolean" : (["row", "col", "table", "at", "limit", "offset", "chars"].contains(name) || (command.first == "attachments" && name == "size")) ? "integer" : "string"
+            let type = argument.kind == .flag ? "boolean" : argument.isRepeating ? "array" : (["row", "col", "table", "at", "limit", "offset", "chars"].contains(name) || (command.first == "attachments" && name == "size")) ? "integer" : "string"
             types[name] = type
             var property: [String: Value] = ["type": .string(type), "description": .string(argument.abstract ?? name)]
+            if type == "array" { property["items"] = .object(["type": "string"]) }
             if let values = argument.allValueStrings, !values.isEmpty { property["enum"] = .array(values.map(Value.string)) }
             if name == "size" && command.first == "attachments" { property["enum"] = [0, 1, 2] }
             properties[name] = .object(property)
             if !argument.isOptional || requiredOptions(for: command).contains(name) { required.append(.string(name)) }
         }
-        if arguments.contains(where: { $0.abstract?.contains("stdin") == true }) {
+        if arguments.contains(where: { ["html", "csv"].contains($0.valueName ?? "") && $0.abstract?.contains("stdin") == true }) {
             properties["stdin"] = .object(["type": "string", "description": "Content for stdin. Set html or csv to - to use it."])
             types["stdin"] = "string"
         }
         let name = command.joined(separator: "_").replacingOccurrences(of: "-", with: "_")
-        let readOnly = ["version", "folders", "ls", "stats", "show", "search", "inspect", "table_ls", "attachments_ls", "links_ls"].contains(name)
+        let readOnly = ["version", "folders", "ls", "stats", "show", "search", "inspect", "dups", "table_ls", "attachments_ls", "links_ls"].contains(name)
         let additive = ["new", "mkfolder", "insert", "attach", "attachments_add", "links_add", "pin", "unpin", "open", "backup", "restore", "snapshot_db", "attachments_export"].contains(name)
         let action = ["attachments", "links"].contains(command.first ?? "") ? command.last : nil
         let discussion = info.discussion.map { text in
@@ -146,7 +147,7 @@ struct MCPToolCommand {
     func invocation(_ values: [String: Value], definitions: [MCPToolCommand]) throws -> (arguments: [String], input: Data?) {
         for (name, value) in values {
             guard let type = types[name] else { throw ValidationError("Unknown parameter: \(name)") }
-            let matches = type == "boolean" ? value.boolValue != nil : type == "integer" ? value.intValue != nil : value.stringValue != nil
+            let matches = type == "boolean" ? value.boolValue != nil : type == "integer" ? value.intValue != nil : type == "array" ? value.arrayValue?.allSatisfy { $0.stringValue != nil } == true : value.stringValue != nil
             guard matches else { throw ValidationError("\(name) must be a \(type)") }
         }
         if tool.name == "help" {
@@ -164,7 +165,8 @@ struct MCPToolCommand {
                 continue
             }
             let text = value.stringValue ?? value.intValue.map(String.init) ?? ""
-            if argument.kind == .positional { positionals.append(text) }
+            if argument.isRepeating { positionals += value.arrayValue?.compactMap(\.stringValue) ?? [] }
+            else if argument.kind == .positional { positionals.append(text) }
             else if let option = argument.preferredName?.name {
                 if argument.kind == .flag { if value.boolValue == true { options.append("--" + option) } }
                 else { options.append("--" + option + "=" + text) }

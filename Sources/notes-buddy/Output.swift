@@ -35,8 +35,25 @@ struct OutputOptions: ParsableArguments {
         guard let data = value as? [String: Any] else { throw NotesError(description: "Notes returned invalid action data") }
         let result = actionResult(action, data: data)
         guard let id = result["id"] as? String else { throw NotesError(description: "Notes returned no action UUID") }
-        try write(result, text: id)
-        summary(actionSummary(result))
+        try writeSaved(result, text: id, summary: actionSummary(result))
+    }
+
+    func writeBatch(_ action: String, items: Any, key: String, fields: [String: Any] = [:], summary text: String) throws {
+        guard let items = items as? [[String: Any]] else { throw NotesError(description: "Notes returned invalid \(key) data") }
+        let ids = try items.map { item -> String in
+            guard let id = item["id"] as? String else { throw NotesError(description: "Notes returned an item without an id") }
+            return id
+        }
+        var result = fields
+        result["action"] = action
+        result["saved"] = true
+        result[key] = items
+        try writeSaved(result, text: ids.joined(separator: "\n"), summary: text)
+    }
+
+    private func writeSaved(_ result: [String: Any], text: String, summary line: String) throws {
+        try write(result, text: text)
+        summary(line)
         if !json, let pending = try openLocalNotes(readOnly: true).cloudStatus()["pendingObjects"] as? Int, pending > 0 {
             summary("Saved locally, run nb sync to send it to iCloud")
         }
@@ -50,16 +67,7 @@ struct OutputOptions: ParsableArguments {
         let references = coreDataIDs(in: value)
         let ids = references.isEmpty ? [:] : try openLocalNotes(readOnly: true).publicIdentifiers(forIDs: Array(references))
         let data = replaceIDs(in: value, using: ids)
-        let plain = text.map { content in
-            content.components(separatedBy: "\n").map { line in
-                let trimmed = line.trimmingCharacters(in: .whitespaces)
-                if let uuid = ids[trimmed] { return line.replacingOccurrences(of: trimmed, with: uuid) }
-                if trimmed.hasPrefix("Export: nb ") {
-                    return ids.reduce(line) { $0.replacingOccurrences(of: $1.key, with: $1.value) }
-                }
-                return line
-            }.joined(separator: "\n")
-        }
+        let plain = text.map { content in ids.reduce(content) { $0.replacingOccurrences(of: $1.key, with: $1.value) } }
         let result = try format(data, text: plain)
         if !result.isEmpty { print(result) }
     }

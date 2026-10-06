@@ -16,6 +16,9 @@ struct Folder: Codable {
     let id: String
     let name: String
     let parent: String?
+    let parentPath: String?
+    let totalNoteCount: Int
+    let totalDeletedNoteCount: Int
     let path: String
     let noteCount: Int
     let deletedNoteCount: Int
@@ -33,13 +36,25 @@ func noteActionData(id: String, fields: [String: Any] = [:]) throws -> [String: 
     return result
 }
 
+func noteReferences(_ ids: [String]) throws -> [String] {
+    guard ids == ["-"] else { return ids }
+    var lines: [String] = []
+    while let line = readLine() {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        if !trimmed.isEmpty { lines.append(trimmed) }
+    }
+    guard !lines.isEmpty else { throw ValidationError("stdin has no note ids, 1 per line") }
+    return lines
+}
+
 func listFolders() throws -> [Folder] {
     try openLocalNotes(readOnly: true).listFolders().map { value in
         guard let id = value["id"] as? String, let name = value["name"] as? String else { throw NotesError(description: "Notes returned invalid folder data") }
         guard let path = value["path"] as? String, let noteCount = value["noteCount"] as? Int,
               let deletedCount = value["deletedNoteCount"] as? Int, let childCount = value["subfolderCount"] as? Int,
-              let empty = value["empty"] as? Bool else { throw NotesError(description: "Notes returned invalid folder statistics") }
-        return Folder(id: id, name: name, parent: value["parent"] as? String, path: path, noteCount: noteCount, deletedNoteCount: deletedCount, subfolderCount: childCount, empty: empty)
+              let empty = value["empty"] as? Bool, let total = value["totalNoteCount"] as? Int,
+              let totalDeleted = value["totalDeletedNoteCount"] as? Int else { throw NotesError(description: "Notes returned invalid folder statistics") }
+        return Folder(id: id, name: name, parent: value["parent"] as? String, parentPath: value["parentPath"] as? String, totalNoteCount: total, totalDeletedNoteCount: totalDeleted, path: path, noteCount: noteCount, deletedNoteCount: deletedCount, subfolderCount: childCount, empty: empty)
     }
 }
 

@@ -216,4 +216,16 @@ final class OutputTests: XCTestCase {
         process.waitUntilExit()
         return (process.terminationStatus, text, message)
     }
+
+    func testSentObjectsNeverGoesNegativeAndFolderTreeIndentsByDepth() {
+        XCTAssertEqual(sentObjects(before: 7, after: 0), 7)
+        XCTAssertEqual(sentObjects(before: 3, after: 5), 0)
+        let folders = [
+            Folder(id: "a", name: "Work", parent: nil, parentPath: nil, totalNoteCount: 5, totalDeletedNoteCount: 0, path: "Work", noteCount: 2, deletedNoteCount: 0, subfolderCount: 1, empty: false),
+            Folder(id: "b", name: "Sub", parent: "a", parentPath: "Work", totalNoteCount: 3, totalDeletedNoteCount: 0, path: "Work/Sub", noteCount: 3, deletedNoteCount: 0, subfolderCount: 0, empty: false),
+            Folder(id: "c", name: "Alpha", parent: nil, parentPath: nil, totalNoteCount: 0, totalDeletedNoteCount: 0, path: "Alpha", noteCount: 0, deletedNoteCount: 0, subfolderCount: 0, empty: true),
+        ]
+        XCTAssertEqual(folderTree(folders), "Alpha  0 notes, 0 in subtree\nWork  2 notes, 5 in subtree\n  Sub  3 notes, 3 in subtree")
+        XCTAssertEqual(try ReadingOptions.longLine(["id": "x", "modified": "2026-10-06T00:00:00Z", "folderPath": "Work", "title": "T"]), "x\t2026-10-06T00:00:00Z\tWork\tT")
+    }
 }

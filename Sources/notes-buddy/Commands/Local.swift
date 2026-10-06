@@ -97,18 +97,62 @@ struct Format: ParsableCommand {
 
 struct Tags: ParsableCommand {
     @OptionGroup var output: OutputOptions
-    static let configuration = CommandConfiguration(abstract: "List, add or remove native tags on a note", discussion: "Without --add or --remove, lists tags. Add --json for structured data. Separate names with slashes, commas or whitespace. Each name becomes a distinct native tag, not text. Duplicates are ignored. Invalid names reject the whole batch. --remove uses the same separators and affects only this note. Search with ls --tag. Saves locally, run nb sync after the last write to send changes to iCloud. Example: nb tags <id> --add 'invoices/tech,other'")
-    @OptionGroup var note: LocalNoteOptions
+    static let configuration = CommandConfiguration(abstract: "List, add, remove or rename native tags", discussion: """
+        Without ids lists every tag of the database with its note count, 1 per line: #name<TAB>count.
+        With ids and no option prints the tags of each note on 1 line. Add --json for tag ids.
+        --add and --remove take 1 or more ids, or - for ids from stdin, and save once. 1 invalid name or refusal cancels the batch.
+        --remove without ids takes the tag off every note. --rename with --to renames the tag everywhere.
+        Separate names with slashes, commas or whitespace. Each name becomes a distinct native tag, not text.
+        Search with ls --tag. Saves locally, run nb sync after the last write to send changes to iCloud.
+
+        EXAMPLES
+          nb tags
+          nb tags <id> --add 'invoices/tech,other'
+          nb tags <id> <id> --remove draft
+          nb tags --remove draft
+          nb tags --rename draft --to review
+        """)
+    @Argument(help: ArgumentHelp("Notes, by \(ReferenceHelp.note), or - for ids from stdin")) var ids: [String] = []
     @Option(help: ArgumentHelp("Native tags to add, \(ReferenceHelp.tag), separated by slash, comma or whitespace")) var add: String?
     @Option(help: ArgumentHelp("Native tags to remove, \(ReferenceHelp.tag) or tag id, separated by slash, comma or whitespace")) var remove: String?
+    @Option(help: ArgumentHelp("Tag to rename everywhere, \(ReferenceHelp.tag)")) var rename: String?
+    @Option(help: "New name for --rename") var to: String?
 
     func run() throws {
-        guard add == nil || remove == nil else { throw ValidationError("choose either --add or --remove") }
-        let store = try note.open(readOnly: add == nil && remove == nil)
-        if let add { return try output.writeAction("tags add", store.editNote(note.id, operation: "tag-add", options: ["name": add])) }
-        if let remove { return try output.writeAction("tags rm", store.editNote(note.id, operation: "tag-remove", options: ["name": remove])) }
-        let data = try store.readNote(note.id)
-        try output.write(["id": data["id"]!, "tags": data["tags"]!])
+        let chosen = [add, remove, rename].compactMap { $0 }.count
+        guard chosen <= 1 else { throw ValidationError("choose one of --add, --remove or --rename") }
+        guard (rename == nil) == (to == nil) else { throw ValidationError("--rename needs --to") }
+        guard add == nil || !ids.isEmpty else { throw ValidationError("--add needs note ids") }
+        guard rename == nil || ids.isEmpty else { throw ValidationError("--rename takes no note ids") }
+        let store = try openLocalNotes(readOnly: chosen == 0)
+        if let rename, let to {
+            let notes = try store.renameTag(rename, to: to)
+            return try output.writeBatch("tags rename", items: notes, key: "notes", fields: ["from": rename, "to": to], summary: "tags rename: #\(rename) to #\(to) on \(notes.count) notes")
+        }
+        if let add {
+            let notes = try store.editNotes(try noteReferences(ids), operation: "tag-add", options: ["name": add])
+            return try output.writeBatch("tags add", items: notes, key: "notes", summary: "tags add: \(notes.count) notes")
+        }
+        if let remove {
+            let notes = try store.editNotes(ids.isEmpty ? nil : try noteReferences(ids), operation: "tag-remove", options: ["name": remove])
+            return try output.writeBatch("tags rm", items: notes, key: "notes", summary: "tags rm: \(notes.count) notes")
+        }
+        if ids.isEmpty {
+            let tags = try store.listTags()
+            let lines = try tags.map { tag -> String in
+                guard let name = tag["name"] as? String, let count = tag["noteCount"] as? Int else { throw NotesError(description: "Notes returned invalid tag data") }
+                return "\(name)\t\(count)"
+            }
+            try output.write(tags, text: lines.joined(separator: "\n"))
+            return output.summary("\(tags.count) tags")
+        }
+        let notes = try noteReferences(ids).map { try store.readNote($0) }
+        let lines = try notes.map { note -> String in
+            guard let tags = note["tags"] as? [[String: Any]] else { throw NotesError(description: "Notes returned invalid tag data") }
+            return tags.compactMap { $0["name"] as? String }.joined(separator: " ")
+        }
+        let objects = notes.map { ["id": $0["id"]!, "tags": $0["tags"]!] }
+        try output.write(objects.count == 1 ? objects[0] : objects, text: lines.joined(separator: "\n"))
     }
 }
 
@@ -326,6 +370,7 @@ struct Search: ParsableCommand {
         var options = try reading.options()
         options["field"] = field.rawValue
         if options["limit"] == nil { options["limit"] = 50 }
+        guard folder != nil || !reading.noRecursive else { throw ValidationError("--no-recursive needs --folder") }
         if let folder { options["folder"] = folder }
         let result = try openLocalNotes(readOnly: true).search(query, options: options)
         guard let notes = result["notes"] as? [[String: Any]] else { throw NotesError(description: "Notes returned invalid search results") }

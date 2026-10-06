@@ -11,25 +11,36 @@ struct Backup: ParsableCommand {
     static let configuration = CommandConfiguration(
         abstract: "Back up the local Notes database and attachment files",
         discussion: """
-        Copies local data without changing Notes or iCloud. Missing attachments fail the backup.
+        Copies local data without changing Notes or iCloud. An attachment without a local file fails the backup.
+        With --skip-missing the backup goes on without such attachments, lists them in stderr,
+        in skippedAttachments of the JSON result and in the manifest.
         The destination must be new and outside Notes. Files stay private to their owner.
 
-        EXAMPLE
+        EXAMPLES
           nb backup ~/Backups/notes-2026-10-05
+          nb backup ~/Backups/notes-2026-10-05 --skip-missing
         """
     )
+    @Flag(help: "Back up without attachments that have no local file and list them") var skipMissing = false
 
     func run() throws {
         let source = notesDirectory()
         let target = URL(fileURLWithPath: destination).standardizedFileURL
         try validateBackupDestination(target, excluding: source)
         let store = try NBNotes(url: source.appendingPathComponent("NoteStore.sqlite"), readOnly: true)
-        let required = try store.backupAttachmentPaths()
+        let attachments = try store.backupAttachments()
+        guard let required = attachments["paths"] as? [String], let missing = attachments["missing"] as? [[String: String]] else { throw NotesError(description: "Notes returned invalid attachment data") }
+        if let first = missing.first, !skipMissing {
+            throw NotesError(description: "Attachment \(first["attachment"] ?? "") (\(first["type"] ?? "")), note \(first["note"] ?? ""), has no local file, no complete backup created. Use --skip-missing to back up the rest")
+        }
         guard required.allSatisfy({ isWithin(URL(fileURLWithPath: $0), source) }) else {
             throw NotesError(description: "An attachment is outside the Notes directory, no backup created")
         }
-        let manifest = try createNotesBackup(from: source, to: target)
-        try output.write(["path": target.path, "files": manifest.files.count, "bytes": manifest.files.reduce(Int64(0)) { $0 + $1.bytes }], text: target.path)
+        let skipped = missing.map { NotesBackupSkippedAttachment(attachment: $0["attachment"] ?? "", note: $0["note"] ?? "", type: $0["type"] ?? "") }
+        let manifest = try createNotesBackup(from: source, to: target, skipping: skipped)
+        for item in skipped { output.summary("Skipped attachment \(item.attachment) (\(item.type)), note \(item.note), no local file") }
+        let result = try JSONSerialization.jsonObject(with: JSONEncoder().encode(skipped))
+        try output.write(["path": target.path, "files": manifest.files.count, "bytes": manifest.files.reduce(Int64(0)) { $0 + $1.bytes }, "skippedAttachments": result], text: target.path)
     }
 }
 
@@ -68,12 +79,19 @@ struct NotesBackupFile: Codable, Equatable {
     let sha256: String
 }
 
+struct NotesBackupSkippedAttachment: Codable, Equatable {
+    let attachment: String
+    let note: String
+    let type: String
+}
+
 struct NotesBackupManifest: Codable {
     let version: Int
     let createdAt: String
     let macOS: String
     let directories: [String]
     let files: [NotesBackupFile]
+    var skippedAttachments: [NotesBackupSkippedAttachment]? = nil
 }
 
 func notesDirectory() -> URL {
@@ -128,7 +146,7 @@ private func tree(_ directory: URL, excluding: Set<String> = []) throws -> (dire
     for case let url as URL in items {
         guard url.path.hasPrefix(root.path + "/") else { throw NotesError(description: "File is outside the source directory") }
         let path = String(url.path.dropFirst(root.path.count + 1))
-        if excluding.contains(path) { continue }
+        if excluding.contains(path) { items.skipDescendants(); continue }
         let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
         switch attributes[.type] as? FileAttributeType {
         case .typeDirectory: directories.append(path)
@@ -151,8 +169,8 @@ private func fingerprint(_ url: URL, path: String) throws -> NotesBackupFile {
     return NotesBackupFile(path: path, bytes: bytes, sha256: hash.finalize().map { String(format: "%02x", $0) }.joined())
 }
 
-func createNotesBackup(from source: URL, to target: URL) throws -> NotesBackupManifest {
-    let excluded: Set<String> = ["NoteStore.sqlite-wal", "NoteStore.sqlite-shm", "NoteStore.sqlite-journal", "com.apple.notes.databaseopen.lock", "SharingExtensionWriteLock"]
+func createNotesBackup(from source: URL, to target: URL, skipping skipped: [NotesBackupSkippedAttachment] = []) throws -> NotesBackupManifest {
+    let excluded: Set<String> = ["NoteStore.sqlite-wal", "NoteStore.sqlite-shm", "NoteStore.sqlite-journal", "com.apple.notes.databaseopen.lock", "SharingExtensionWriteLock", "Library", "tmp"]
     let original = try tree(source, excluding: excluded)
     guard original.files.contains("NoteStore.sqlite") else { throw NotesError(description: "NoteStore.sqlite not found") }
     var connection: OpaquePointer?
@@ -192,7 +210,7 @@ func createNotesBackup(from source: URL, to target: URL) throws -> NotesBackupMa
             guard try fingerprint(source.appendingPathComponent(file.path), path: file.path) == file else { throw NotesError(description: "Source changed during backup: \(file.path)") }
         }
         guard try sqliteScalar(connection, "PRAGMA data_version") == version else { throw NotesError(description: "Notes changed during backup, retry when idle") }
-        result = NotesBackupManifest(version: 1, createdAt: ISO8601DateFormatter().string(from: Date()), macOS: ProcessInfo.processInfo.operatingSystemVersionString, directories: original.directories, files: files)
+        result = NotesBackupManifest(version: 1, createdAt: ISO8601DateFormatter().string(from: Date()), macOS: ProcessInfo.processInfo.operatingSystemVersionString, directories: original.directories, files: files, skippedAttachments: skipped.isEmpty ? nil : skipped)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         let manifest = staging.appendingPathComponent("manifest.json")

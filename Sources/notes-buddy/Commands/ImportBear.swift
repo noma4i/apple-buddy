@@ -222,7 +222,7 @@ struct ImportBear: ParsableCommand {
                     let state = try store.readNote(id)
                     if state["folderPath"] as? String != note.destination {
                         guard repairFolders else { throw NotesError(description: "Existing import is in the wrong folder: \(note.identifier), use --repair-folders") }
-                        try store.moveNote(id, toFolder: destination(note.destination))
+                        _ = try store.moveNotes(withIDs: [id], toFolder: destination(note.destination))
                         moved += 1
                     }
                     result = ["id": id, "imported": false]

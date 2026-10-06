@@ -35,19 +35,22 @@ struct Remove: ParsableCommand {
         commandName: "rm",
         abstract: "Delete a note (moves it to Recently Deleted)",
         discussion: """
-        The note goes to Recently Deleted in Notes and can be restored there.
+        The notes go to Recently Deleted in Notes and can be restored there.
+        Accepts many ids, or - to read ids from stdin, 1 per line. All are checked before any change, 1 refusal cancels the batch.
+        Prints the UUIDs of the removed notes. With --json returns {action, saved, notes}.
         Saves locally, run nb sync after the last write to send changes to iCloud.
 
-        EXAMPLE
+        EXAMPLES
           nb rm <id>
+          nb search draft --field title | nb rm -
         """
     )
 
-    @Argument(help: ReferenceHelp.note) var id: String
+    @Argument(help: ArgumentHelp("1 or more notes, by \(ReferenceHelp.note), or - for ids from stdin")) var ids: [String]
 
     func run() throws {
-        try openLocalNotes(readOnly: false).deleteNote(id)
-        try output.writeAction("rm", noteActionData(id: id, fields: ["deleted": true]))
+        let notes = try openLocalNotes(readOnly: false).trashNotes(withIDs: try noteReferences(ids))
+        try output.writeBatch("rm", items: notes, key: "notes", summary: "rm: \(notes.count) notes to Recently Deleted")
     }
 }
 
@@ -57,20 +60,24 @@ struct Move: ParsableCommand {
         commandName: "mv",
         abstract: "Move a note to another folder",
         discussion: """
-        Moves the note to an existing folder. The note id stays the same.
+        Moves the notes to an existing folder. Note ids stay the same.
+        Accepts many ids, or - to read ids from stdin, 1 per line. All are checked before any change, 1 refusal cancels the batch.
+        Prints the UUIDs of the moved notes. With --json returns {action, saved, folder, folderPath, notes}.
         Saves locally, run nb sync after the last write to send changes to iCloud.
 
-        EXAMPLE
+        EXAMPLES
           nb mv <id> --folder Archive
+          nb ls --folder Inbox | nb mv - --folder Archive
         """
     )
 
-    @Argument(help: ReferenceHelp.note) var id: String
+    @Argument(help: ArgumentHelp("1 or more notes, by \(ReferenceHelp.note), or - for ids from stdin")) var ids: [String]
     @Option(help: ArgumentHelp("Target folder, by \(ReferenceHelp.folder)")) var folder: String
 
     func run() throws {
-        try openLocalNotes(readOnly: false).moveNote(id, toFolder: folder)
-        try output.writeAction("mv", noteActionData(id: id, fields: ["moved": true]))
+        let target = try resolveFolder(named: folder)
+        let notes = try openLocalNotes(readOnly: false).moveNotes(withIDs: try noteReferences(ids), toFolder: target.id)
+        try output.writeBatch("mv", items: notes, key: "notes", fields: ["folder": target.id, "folderPath": target.path], summary: "mv: \(notes.count) notes to \(target.path)")
     }
 }
 

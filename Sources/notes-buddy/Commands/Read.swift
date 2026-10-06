@@ -7,32 +7,78 @@ struct Folders: ParsableCommand {
         abstract: "List folders",
         discussion: """
         Lists folder UUIDs, paths, note counts and subfolder counts.
-        Counts are direct and do not include subfolders. Deleted notes are counted in Recently Deleted.
-        With --json includes name, path, parent, noteCount, deletedNoteCount, subfolderCount and empty.
+        noteCount is direct, totalNoteCount includes subfolders. Deleted notes are counted in Recently Deleted.
+        With --json includes name, path, parent, parentPath, noteCount, deletedNoteCount, totalNoteCount,
+        totalDeletedNoteCount, subfolderCount and empty. empty means no notes and no subfolders.
+        --tree prints the folder tree with 2 spaces per level: name, direct notes and notes in the subtree.
 
-        EXAMPLE
+        EXAMPLES
           nb folders --json
+          nb folders --tree
         """
     )
+    @Flag(help: "Print the folder tree with counts instead of the flat list") var tree = false
 
     func run() throws {
         let folders = try listFolders()
-        try output.writeEncodable(folders, text: folders.map(\.summary).joined(separator: "\n"))
+        try output.writeEncodable(folders, text: tree ? folderTree(folders) : folders.map(\.summary).joined(separator: "\n"))
+    }
+}
+
+func folderTree(_ folders: [Folder]) -> String {
+    func lines(parent: String?, depth: Int) -> [String] {
+        folders.filter { $0.parent == parent }.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }.flatMap { folder -> [String] in
+            [String(repeating: "  ", count: depth) + "\(folder.name)  \(folder.noteCount) notes, \(folder.totalNoteCount) in subtree"] + lines(parent: folder.id, depth: depth + 1)
+        }
+    }
+    return lines(parent: nil, depth: 0).joined(separator: "\n")
+}
+
+struct Duplicates: ParsableCommand {
+    @OptionGroup var output: OutputOptions
+    static let configuration = CommandConfiguration(
+        commandName: "dups",
+        abstract: "Group notes with identical text and identical attachment files",
+        discussion: """
+        Compares the note text with table cells, whitespace differences ignored, and the SHA-256 of every attachment file.
+        An attachment without a local file matches nothing. Empty notes without attachments are not grouped.
+        Prints 1 line per note, <uuid><TAB><folderPath><TAB><title>, groups separated by an empty line. Largest groups first.
+        With --json returns an array of {notes} with the same note fields as ls. Reads only, never changes Notes.
+
+        EXAMPLES
+          nb dups
+          nb dups --folder Work --json
+        """
+    )
+    @Option(help: ArgumentHelp("Only notes of this folder and its subfolders, by \(ReferenceHelp.folder)")) var folder: String?
+
+    func run() throws {
+        var options: [String: Any] = [:]
+        if let folder { options["folder"] = folder }
+        let groups = try openLocalNotes(readOnly: true).duplicateGroups(options)
+        let blocks = try groups.map { group -> String in
+            guard let notes = group["notes"] as? [[String: Any]] else { throw NotesError(description: "Notes returned invalid duplicate data") }
+            return try notes.map(ReadingOptions.longLine).joined(separator: "\n")
+        }
+        try output.write(groups, text: blocks.joined(separator: "\n\n"))
+        output.summary("\(groups.count) groups, \(groups.reduce(0) { $0 + (($1["notes"] as? [Any])?.count ?? 0) }) notes")
     }
 }
 
 struct Stats: ParsableCommand {
     @OptionGroup var output: OutputOptions
     @Option(help: ArgumentHelp("Only this folder and its subfolders, by \(ReferenceHelp.folder)")) var folder: String?
+    @Flag(help: "With --folder, count only that folder without its subfolders") var noRecursive = false
     static let configuration = CommandConfiguration(
         abstract: "Show note counts and folder organization",
-        discussion: "Shows active and deleted note counts separately. The first line, totalNoteCount and totalDeletedNoteCount cover every listed folder. Each folder line and noteCount are direct. Empty includes notes and subfolders. Example: nb stats --folder Work --json"
+        discussion: "Shows active and deleted note counts separately. The first line, totalNoteCount and totalDeletedNoteCount cover every listed folder. Each folder line and noteCount are direct. --folder includes subfolders unless --no-recursive is set. Empty includes notes and subfolders. Example: nb stats --folder Work --json"
     )
 
     func run() throws {
+        guard folder != nil || !noRecursive else { throw ValidationError("--no-recursive needs --folder") }
         let all = try listFolders()
         var folders = all
-        if let folder { folders = foldersWithDescendants(of: try resolveFolder(named: folder), in: all) }
+        if let folder { folders = noRecursive ? [try resolveFolder(named: folder)] : foldersWithDescendants(of: try resolveFolder(named: folder), in: all) }
         folders.sort { $0.path < $1.path }
         let notes = folders.reduce(0) { $0 + $1.noteCount }
         let deleted = folders.reduce(0) { $0 + $1.deletedNoteCount }
@@ -48,12 +94,14 @@ struct List: ParsableCommand {
         commandName: "ls",
         abstract: "List notes",
         discussion: """
-        Prints one note UUID per line, without titles or other fields.
+        Prints one note UUID per line.
+        --folder includes subfolders unless --no-recursive is set.
         With --json prints an array of {id, url, title, folder, folderPath, modified, pinned, protected, shared, tags, attachments, urls}.
         Shared and locked notes are listed and cannot be changed by nb.
         Dates are in ISO 8601. Locked notes have no urls. Newest notes come first.
-        --folder includes subfolders. Deleted notes are listed only with --folder "Recently Deleted".
+        Deleted notes are listed only with --folder "Recently Deleted".
         Without --folder lists the notes of every folder, which is slow with many notes.
+        --long prints 1 line per note: <uuid><TAB><modified><TAB><folderPath><TAB><title>.
         --show prints each note in full, the UUID, title, folder and date, then the show text.
         With --json, --show adds the show fields without runs: text, textLength, tables, links and cloud state.
         --chars N keeps the first N characters of each text, textLength keeps the full length.
@@ -61,6 +109,7 @@ struct List: ParsableCommand {
 
         EXAMPLES
           nb ls --folder Work
+          nb ls --folder Work --long --no-recursive
           nb ls --folder Work --show --limit 5
           nb ls --folder Work --show --chars 2000 --json
         """
@@ -72,6 +121,7 @@ struct List: ParsableCommand {
 
     func run() throws {
         var options = try reading.options()
+        guard folder != nil || !reading.noRecursive else { throw ValidationError("--no-recursive needs --folder") }
         if let folder { options["folder"] = folder }
         if let tag { options["tag"] = tag }
         let result = try openLocalNotes(readOnly: true).listNotes(options)
@@ -83,6 +133,8 @@ struct List: ParsableCommand {
 
 struct ReadingOptions: ParsableArguments {
     @Flag(help: "Print each note in full instead of only its UUID") var show = false
+    @Flag(help: "Print 1 line per note: uuid, modified, folder path and title, tab separated") var long = false
+    @Flag(help: "With --folder, read only that folder without its subfolders") var noRecursive = false
     @Option(help: "With --show, keep only the first N characters of each note text") var chars: Int?
     @Option(help: "Maximum number of notes") var limit: Int?
     @Option(help: "Skip this many notes") var offset = 0
@@ -92,13 +144,20 @@ struct ReadingOptions: ParsableArguments {
         guard offset >= 0 else { throw ValidationError("--offset must be nonnegative") }
         if let chars, chars <= 0 { throw ValidationError("--chars must be positive") }
         if chars != nil && !show { throw ValidationError("--chars needs --show") }
-        var options: [String: Any] = ["offset": offset, "show": show]
+        guard !(show && long) else { throw ValidationError("choose either --show or --long") }
+        var options: [String: Any] = ["offset": offset, "show": show, "direct": noRecursive]
         if let limit { options["limit"] = limit }
         if let chars { options["chars"] = chars }
         return options
     }
 
+    static func longLine(_ note: [String: Any]) throws -> String {
+        guard let id = note["id"] as? String, let title = note["title"] as? String else { throw NotesError(description: "Notes returned invalid note data") }
+        return [id, note["modified"] as? String ?? "", note["folderPath"] as? String ?? "", title].joined(separator: "\t")
+    }
+
     func render(_ notes: [[String: Any]]) throws -> String {
+        if long { return try notes.map(Self.longLine).joined(separator: "\n") }
         guard show else {
             return try notes.map { note in
                 guard let id = note["id"] as? String else { throw NotesError(description: "Notes returned a note without an id") }
