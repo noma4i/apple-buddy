@@ -60,7 +60,8 @@ func requireAccess(_ store: EventStore, _ kind: ItemKind) throws {
     let status = store.accessStatus(kind)
     guard status == "fullAccess" else {
         let group = kind == .reminder ? "reminders" : "calendar"
-        throw NotesError(description: "\(kind == .reminder ? "Reminders" : "Calendar") access is \(status). Run abdy \(group) access and allow it in the system dialog, or enable it in System Settings, Privacy and Security")
+        let holder = ProcessInfo.processInfo.environment["ABDY_IN_APP"] != nil ? " for Abdy.app" : ""
+        throw NotesError(description: "\(kind == .reminder ? "Reminders" : "Calendar") access is \(status)\(holder). Run abdy \(group) access and allow it in the system dialog, or enable it in System Settings, Privacy and Security")
     }
 }
 

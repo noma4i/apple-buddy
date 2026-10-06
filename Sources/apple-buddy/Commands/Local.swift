@@ -26,7 +26,16 @@ func openLocalNotes(readOnly: Bool) throws -> NBNotes {
     if !readOnly { try quitNotes(NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.Notes")) }
     let url = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent("Library/Group Containers/group.com.apple.notes/NoteStore.sqlite")
+    try requireReadableDatabase(url)
     return try NBNotes(url: url, readOnly: readOnly)
+}
+
+func requireReadableDatabase(_ url: URL) throws {
+    let descriptor = open(url.path, O_RDONLY)
+    if descriptor >= 0 { close(descriptor); return }
+    guard errno == EPERM || errno == EACCES else { return }
+    let holder = ProcessInfo.processInfo.environment["ABDY_IN_APP"] != nil ? "Abdy.app (\(AppBundle.bundle.path))" : "this terminal application"
+    throw NotesError(description: "macOS blocks \(holder) from reading the Notes database \(url.path). Allow it in System Settings, Privacy and Security, Full Disk Access, then run the command again")
 }
 
 struct PositionOptions: ParsableArguments {

@@ -10,6 +10,14 @@ struct AppleBuddy: ParsableCommand {
     static func main() {
         var commandType: ParsableCommand.Type = Self.self
         let arguments = aliasedArguments(program: CommandLine.arguments.first ?? "", Array(CommandLine.arguments.dropFirst()))
+        let environment = ProcessInfo.processInfo.environment
+        if AppLaunch.shouldRunInApp(arguments: arguments, environment: environment) {
+            do { Darwin.exit(try AppLaunch.run(arguments: arguments, environment: environment)) } catch {
+                FileHandle.standardError.write(Data("Error: \(error)\n".utf8))
+                Darwin.exit(1)
+            }
+        }
+        AppLaunch.reportExitAtExit(environment: environment)
         for (index, argument) in arguments.enumerated() {
             if argument == "--json" && commandType._commandName == configuration.commandName { continue }
             if argument == "help" {
@@ -40,7 +48,8 @@ struct AppleBuddy: ParsableCommand {
         }
         if let failure {
             FileHandle.standardError.write(Data((inputErrorMessage(fullMessage(for: failure)) + "\n").utf8))
-            Darwin.exit(exitCode(for: failure).rawValue)
+            AppLaunch.status = exitCode(for: failure).rawValue
+            Darwin.exit(AppLaunch.status)
         }
     }
 

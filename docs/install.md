@@ -22,9 +22,15 @@ GitHub installation becomes available after the tap changes are pushed and their
 
 ## Access
 
-Notes: the terminal application needs Full Disk Access when database access is denied.
-Reminders and Calendar: run `abdy reminders access` and `abdy calendar access` once, allow the system dialog.
-Access belongs to the terminal application that runs `abdy`, including an agent's host application.
+`abdy notes`, `abdy reminders` and `abdy calendar` run inside their own application, `Abdy.app` (bundle id `com.noma4i.abdy`).
+`abdy` builds it on first use in `~/Library/Application Support/apple-buddy` and rebuilds it after an update.
+Access belongs to `Abdy.app`, not to the terminal, the agent host, `ssh` or `launchd`, so every caller gets the same rights.
+
+1. Reminders and Calendar: run `abdy reminders access` and `abdy calendar access` once and allow the system dialog.
+2. Notes: macOS shows no dialog. Add `Abdy.app` to System Settings, Privacy and Security, Full Disk Access. The error message of `abdy notes` names the exact path.
+
+Rights survive updates: the signature requirement is the bundle id, not the file hash.
+`help`, `version` and `mcp` do not use the application. A command costs about 0.1 s more than a direct run.
 
 ## From source
 
