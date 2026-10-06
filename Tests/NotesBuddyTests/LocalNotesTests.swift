@@ -326,6 +326,35 @@ final class LocalNotesTests: XCTestCase {
         }
     }
 
+    func testRefusalsNameTheObjectAndTheOneConditionThatApplies() throws {
+        let store = try NBNotes(url: database, readOnly: false)
+        let context = try XCTUnwrap(store.value(forKey: "context") as? NSManagedObjectContext)
+        func object(_ id: String) throws -> NSManagedObject {
+            try context.existingObject(with: try XCTUnwrap(context.persistentStoreCoordinator?.managedObjectID(forURIRepresentation: URL(string: id)!)))
+        }
+        try object(targetID).setValue("_someone_else", forKey: "zoneOwnerName")
+        try context.save()
+        let uuid = try XCTUnwrap(store.publicIdentifiers(forIDs: [targetID])[targetID])
+        let listed = try XCTUnwrap(try store.notes(["folder": "Fixture"]).first { $0["id"] as? String == targetID })
+        XCTAssertEqual(listed["shared"] as? Bool, true)
+        XCTAssertEqual(try store.readNote(noteID)["shared"] as? Bool, false)
+        XCTAssertEqual(message(try store.moveNote(targetID, toFolder: "Fixture")), "Note \(uuid) is shared and cannot be moved")
+        XCTAssertEqual(message(try store.deleteNote(targetID)), "Note \(uuid) is shared and cannot be removed")
+        XCTAssertEqual(message(try store.editNote(targetID, operation: "tag-add", options: ["name": "x"])), "Note \(uuid) is shared and cannot be changed")
+        try object(targetID).setValue(nil, forKey: "zoneOwnerName")
+        try object(targetID).setValue(true, forKey: "isPasswordProtected")
+        try context.save()
+        XCTAssertEqual(message(try store.editNote(targetID, operation: "tag-add", options: ["name": "x"])), "Note \(uuid) is locked and cannot be read")
+        let folderID = try store.createFolder("Shared", parent: nil)
+        try object(folderID).setValue("_someone_else", forKey: "zoneOwnerName")
+        try context.save()
+        let folderUUID = try XCTUnwrap(store.publicIdentifiers(forIDs: [folderID])[folderID])
+        XCTAssertEqual(message(try store.createNote(inFolder: folderID, html: "<p>x</p>")), "Folder \(folderUUID) is shared and cannot hold new notes")
+        XCTAssertEqual(message(try store.moveNote(noteID, toFolder: folderID)), "Folder \(folderUUID) is shared and cannot be the target")
+        XCTAssertEqual(message(try store.createFolder("Child", parent: folderID)), "Folder \(folderUUID) is shared and cannot be the parent")
+        XCTAssertEqual(message(try store.removeFolder(folderID)), "Folder \(folderUUID) is shared and cannot be removed")
+    }
+
     func testHiddenFolderReferenceIsRejectedWithAReadableMessage() throws {
         let store = try NBNotes(url: database, readOnly: false)
         let folderID = try store.createFolder("Hidden", parent: nil)
@@ -458,7 +487,7 @@ final class LocalNotesTests: XCTestCase {
         let found = try XCTUnwrap((store.search("Fixture", options: ["field": "title"])["notes"] as? [[AnyHashable: Any]])?.first { $0["id"] as? String == noteID })
         let shown = try store.readNote(noteID)
         let keys = Set(listed.keys.compactMap { $0 as? String })
-        XCTAssertEqual(keys, ["id", "url", "title", "folder", "folderPath", "modified", "pinned", "protected", "tags", "attachments", "urls"])
+        XCTAssertEqual(keys, ["id", "url", "title", "folder", "folderPath", "modified", "pinned", "protected", "shared", "tags", "attachments", "urls"])
         XCTAssertEqual(Set(found.keys.compactMap { $0 as? String }).subtracting(["excerpt", "matchType", "matchedFields"]), keys)
         XCTAssertTrue(keys.isSubset(of: Set(shown.keys.compactMap { $0 as? String })))
         for key in keys {

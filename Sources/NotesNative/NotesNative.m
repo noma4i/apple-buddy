@@ -284,7 +284,7 @@ static void NBRequire(BOOL valid, NSString *message) {
         NBRequire(existing.count <= 1, @"Duplicate import identifier in Notes");
         if (existing.count) {
             NSManagedObject *note = existing.firstObject;
-            NBRequire(![[note valueForKey:@"isDeletedOrInTrash"] boolValue], @"Imported note was deleted, refusing to recreate it");
+            [self refuse:note flags:@[@"isDeletedOrInTrash"] action:@"be imported again"];
             if (![self isUnfinishedImport:note]) return @{@"id":note.objectID.URIRepresentation.absoluteString, @"imported":@NO};
             NBRequire([[note valueForKey:@"folder"] isEqual:[self folder:folder]], @"Incomplete import belongs to another folder");
             [_context deleteObject:note];
@@ -336,12 +336,27 @@ static void NBRequire(BOOL valid, NSString *message) {
 - (BOOL)isProtectedOrShared:(NSManagedObject *)object {
     if (![object isKindOfClass:NSClassFromString(@"ICCloudSyncingObject")]) return NO;
     if ([[object valueForKey:@"isSharedViaICloud"] boolValue]) return YES;
+    NSManagedObject *owner = [self owningNote:object];
+    return [[owner valueForKey:@"isPasswordProtected"] boolValue] || [[owner valueForKey:@"isSharedViaICloud"] boolValue];
+}
+
+- (NSManagedObject *)owningNote:(NSManagedObject *)object {
     NSManagedObject *owner = object;
     while (owner && ![owner.entity.name isEqualToString:@"ICNote"]) {
         NSDictionary *relationships = owner.entity.relationshipsByName;
         owner = relationships[@"note"] ? [owner valueForKey:@"note"] : relationships[@"attachment"] ? [owner valueForKey:@"attachment"] : nil;
     }
-    return [[owner valueForKey:@"isPasswordProtected"] boolValue] || [[owner valueForKey:@"isSharedViaICloud"] boolValue];
+    return owner;
+}
+
+- (void)refuse:(NSManagedObject *)object flags:(NSArray<NSString *> *)flags action:(NSString *)action {
+    static NSDictionary *states;
+    if (!states) states = @{@"isSharedViaICloud":@"shared", @"isPasswordProtected":@"locked", @"isDeletedOrInTrash":@"deleted", @"markedForDeletion":@"deleted", @"isTrashFolder":@"deleted", @"isSmartFolder":@"smart", @"isSystemFolder":@"system"};
+    for (NSString *flag in flags) {
+        if (![[object valueForKey:flag] boolValue]) continue;
+        NSString *kind = [object.entity.name isEqualToString:@"ICFolder"] ? @"Folder" : @"Note";
+        NBRequire(NO, [NSString stringWithFormat:@"%@ %@ is %@ and cannot %@", kind, [self publicIdentifierForObject:object], states[flag], action]);
+    }
 }
 
 - (BOOL)saveChanges:(NSError **)error {
@@ -349,7 +364,11 @@ static void NBRequire(BOOL valid, NSString *message) {
     NSMutableSet *changed = [_context.insertedObjects mutableCopy];
     [changed unionSet:_context.updatedObjects];
     for (NSManagedObject *object in [changed setByAddingObjectsFromSet:_context.deletedObjects]) {
-        NBRequire(![self isProtectedOrShared:object], @"Protected and shared notes cannot be changed");
+        if (![object isKindOfClass:NSClassFromString(@"ICCloudSyncingObject")]) continue;
+        NSManagedObject *owner = [self owningNote:object];
+        if (owner) [self refuse:owner flags:@[@"isSharedViaICloud", @"isPasswordProtected"] action:@"be changed"];
+        if ([object.entity.name isEqualToString:@"ICFolder"]) [self refuse:object flags:@[@"isSharedViaICloud"] action:@"be changed"];
+        NBRequire(![[object valueForKey:@"isSharedViaICloud"] boolValue], @"Shared objects cannot be changed");
     }
     for (NSManagedObject *object in changed) {
         if ([object isKindOfClass:NSClassFromString(@"ICCloudSyncingObject")] && !object.isDeleted) [object updateChangeCountWithReason:@"notes-buddy"];
@@ -410,8 +429,8 @@ static void NBRequire(BOOL valid, NSString *message) {
             NSManagedObject *object = [_context existingObjectWithID:objectID error:error];
             if (!object) return NO;
             NBRequire([@[@"ICNote", @"ICFolder"] containsObject:object.entity.name], @"Cloud queue accepts notes and folders only");
-            NBRequire(![[object valueForKey:@"isSharedViaICloud"] boolValue] && ![[object valueForKey:@"markedForDeletion"] boolValue], @"Shared and deleted objects cannot be queued");
-            if ([object.entity.name isEqualToString:@"ICNote"]) NBRequire(![[object valueForKey:@"isPasswordProtected"] boolValue] && ![[object valueForKey:@"isDeletedOrInTrash"] boolValue], @"Protected and deleted notes cannot be queued");
+            [self refuse:object flags:@[@"isSharedViaICloud", @"markedForDeletion"] action:@"be queued"];
+            if ([object.entity.name isEqualToString:@"ICNote"]) [self refuse:object flags:@[@"isPasswordProtected", @"isDeletedOrInTrash"] action:@"be queued"];
             [objects addObject:object];
         }
         NSMutableArray *remaining = [[objects allObjects] mutableCopy];
@@ -574,6 +593,7 @@ static void NBRequire(BOOL valid, NSString *message) {
         @"title":[note valueForKey:@"title"] ?: @"",
         @"pinned":@([[note valueForKey:@"isPinned"] boolValue]),
         @"protected":@(locked),
+        @"shared":@([[note valueForKey:@"isSharedViaICloud"] boolValue]),
         @"attachments":[self attachmentDetailsForNote:note],
         @"tags":[self tagDetailsForNote:note]
     } mutableCopy];
@@ -635,7 +655,7 @@ static void NBRequire(BOOL valid, NSString *message) {
             NBRequire(accounts.count == 1, @"Root folder creation requires one Notes account, otherwise specify --parent");
             account = accounts.firstObject;
         }
-        if (parent) NBRequire(![[parent valueForKey:@"isSharedViaICloud"] boolValue] && ![[parent valueForKey:@"isSmartFolder"] boolValue] && ![[parent valueForKey:@"isTrashFolder"] boolValue], @"Parent folder cannot be shared, smart or deleted");
+        if (parent) [self refuse:parent flags:@[@"isSharedViaICloud", @"isSmartFolder", @"isTrashFolder"] action:@"be the parent"];
         for (NSManagedObject *folder in [NSClassFromString(@"ICFolder") visibleFoldersInContext:_context]) {
             BOOL sameParent = parent ? [[folder parentFolder] isEqual:parent] : [folder parentFolder] == nil;
             NBRequire(!(sameParent && [[folder valueForKey:@"account"] isEqual:account] && [[folder valueForKey:@"title"] isEqualToString:name]), @"Folder already exists");
@@ -652,7 +672,7 @@ static void NBRequire(BOOL valid, NSString *message) {
     @try {
         [self requireWritable];
         NSManagedObject *folder = [self folder:reference];
-        NBRequire(![[folder valueForKey:@"isSystemFolder"] boolValue] && ![[folder valueForKey:@"isSharedViaICloud"] boolValue], @"System and shared folders cannot be removed");
+        [self refuse:folder flags:@[@"isSystemFolder", @"isSharedViaICloud"] action:@"be removed"];
         NBRequire([self notesForReadingInFolder:reference tag:nil].count == 0, @"Folder has notes, move or remove them first");
         for (NSManagedObject *other in [NSClassFromString(@"ICFolder") visibleFoldersInContext:_context]) NBRequire(![[other parentFolder] isEqual:folder], @"Folder has subfolders, remove them first");
         [NSClassFromString(@"ICFolder") deleteFolder:folder];
@@ -674,7 +694,7 @@ static void NBRequire(BOOL valid, NSString *message) {
 
 - (NSManagedObject *)newNoteInFolder:(NSString *)reference html:(NSString *)html identifier:(NSString *)identifier {
     NSManagedObject *folder = [self folder:reference];
-    NBRequire(![[folder valueForKey:@"isTrashFolder"] boolValue] && ![[folder valueForKey:@"isSmartFolder"] boolValue] && ![[folder valueForKey:@"isSharedViaICloud"] boolValue], @"Cannot create notes in a deleted, smart or shared folder");
+    [self refuse:folder flags:@[@"isTrashFolder", @"isSmartFolder", @"isSharedViaICloud"] action:@"hold new notes"];
     NSManagedObject *note = [NSClassFromString(@"ICNote") newEmptyNoteWithIdentifier:identifier folder:folder];
     NBRequire(note != nil, @"Notes could not create the note");
     [self writeHTML:html toNote:note];
@@ -696,8 +716,8 @@ static void NBRequire(BOOL valid, NSString *message) {
         NSManagedObject *note = [self note:identifier error:error];
         if (!note) return NO;
         NSManagedObject *folder = [self folder:reference];
-        NBRequire(![[note valueForKey:@"isSharedViaICloud"] boolValue] && ![[note valueForKey:@"isDeletedOrInTrash"] boolValue], @"Shared and deleted notes cannot be moved");
-        NBRequire(![[folder valueForKey:@"isSharedViaICloud"] boolValue] && ![[folder valueForKey:@"isTrashFolder"] boolValue] && ![[folder valueForKey:@"isSmartFolder"] boolValue], @"Target folder cannot be shared, smart or deleted");
+        [self refuse:note flags:@[@"isSharedViaICloud", @"isDeletedOrInTrash"] action:@"be moved"];
+        [self refuse:folder flags:@[@"isSharedViaICloud", @"isTrashFolder", @"isSmartFolder"] action:@"be the target"];
         NBRequire([[note valueForKey:@"account"] isEqual:[folder valueForKey:@"account"]], @"Moving notes between accounts is not supported");
         [self changeFolder:folder forNote:note];
         return [self saveChanges:error];
@@ -709,7 +729,7 @@ static void NBRequire(BOOL valid, NSString *message) {
         [self requireWritable];
         NSManagedObject *note = [self note:identifier error:error];
         if (!note) return NO;
-        NBRequire(![[note valueForKey:@"isSharedViaICloud"] boolValue] && ![[note valueForKey:@"isDeletedOrInTrash"] boolValue], @"Shared and deleted notes cannot be removed");
+        [self refuse:note flags:@[@"isSharedViaICloud", @"isDeletedOrInTrash"] action:@"be removed"];
         NSManagedObject *account = [note valueForKey:@"account"];
         if (![account trashFolder]) [account createTrashFolder];
         NBRequire([account trashFolder] != nil, @"Notes has no Recently Deleted folder");
@@ -850,10 +870,8 @@ static void NBRequire(BOOL valid, NSString *message) {
     }
     NSManagedObject *note = [_context existingObjectWithID:objectID error:error];
     if (!note) return nil;
-    if ([[note valueForKey:@"isPasswordProtected"] boolValue]) {
-        if (error) *error = NBError(@"Password-protected notes are not supported");
-        return nil;
-    }
+    @try { [self refuse:note flags:@[@"isPasswordProtected"] action:@"be read"]; }
+    @catch (NSException *exception) { if (error) *error = NBError(exception.reason); return nil; }
     return note;
 }
 
@@ -1403,11 +1421,7 @@ static void NBRequire(BOOL valid, NSString *message) {
     @try {
         NBRequire([@[@"pin", @"unpin", @"replace", @"insert", @"format", @"table-new", @"table-set", @"table-add-row", @"table-rm-row", @"table-add-col", @"table-rm-col", @"tag-add", @"tag-remove", @"link-add", @"link-replace", @"link-remove", @"attachment-add", @"attachment-remove", @"attachment-replace", @"attachment-move", @"attachment-view"] containsObject:operation], @"Unknown edit operation");
         [self requireWritable];
-        if ([[note valueForKey:@"isSharedViaICloud"] boolValue]) {
-            if (error) *error = NBError(@"Shared notes are not supported for editing");
-            return nil;
-        }
-        NBRequire(![[note valueForKey:@"isDeletedOrInTrash"] boolValue], @"Cannot edit a deleted note");
+        [self refuse:note flags:@[@"isSharedViaICloud", @"isDeletedOrInTrash"] action:@"be changed"];
         if ([operation isEqualToString:@"pin"] || [operation isEqualToString:@"unpin"]) {
             NBRequire([note isPinnable], @"This note cannot be pinned");
             BOOL pinned = [operation isEqualToString:@"pin"];
@@ -1433,7 +1447,7 @@ static void NBRequire(BOOL valid, NSString *message) {
         } else if ([operation isEqualToString:@"link-add"] || [operation isEqualToString:@"link-replace"]) {
             NSManagedObject *target = [self note:options[@"target"] error:error];
             if (!target) return nil;
-            NBRequire(![[target valueForKey:@"isDeletedOrInTrash"] boolValue], @"Cannot link to a deleted note");
+            [self refuse:target flags:@[@"isDeletedOrInTrash"] action:@"be linked"];
             NSUInteger position = [self position:options inDocument:document];
             NSRange replaced = NSMakeRange(NSNotFound, 0);
             if ([operation isEqualToString:@"link-replace"]) {
@@ -1492,7 +1506,7 @@ static void NBRequire(BOOL valid, NSString *message) {
             } else if ([operation isEqualToString:@"attachment-move"]) {
                 NSManagedObject *target = [self note:options[@"target"] error:error];
                 if (!target) return nil;
-                NBRequire(![[target valueForKey:@"isSharedViaICloud"] boolValue] && ![[target valueForKey:@"isDeletedOrInTrash"] boolValue], @"Target note cannot be shared or deleted");
+                [self refuse:target flags:@[@"isSharedViaICloud", @"isDeletedOrInTrash"] action:@"receive attachments"];
                 NBRequire([[note valueForKey:@"account"] isEqual:[target valueForKey:@"account"]], @"Moving attachments between accounts is not supported");
                 [self removeMarkers:attachment fromDocument:document];
                 [attachment setValue:target forKey:@"note"];

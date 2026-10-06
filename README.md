@@ -190,7 +190,8 @@ JSON includes `scannedDocuments`, `cachedDocuments` and document errors. Images 
 Missing files and extraction errors are reported. OCR does not modify Notes.
 Malformed PDFs can produce a macOS decoding warning during first indexing.
 `ls --json`, `search --json`, `show --json` and `inspect --json` describe a note with the same fields:
-`id`, `url`, `title`, `folder`, `folderPath`, `modified`, `pinned`, `protected`, `tags`, `attachments` and `urls`.
+`id`, `url`, `title`, `folder`, `folderPath`, `modified`, `pinned`, `protected`, `shared`, `tags`, `attachments` and `urls`.
+`shared` notes (iCloud collaboration) and `protected` notes cannot be changed by `nb`. A refusal names the note, its state and the action, for example `Note <UUID> is shared and cannot be moved`.
 `folder` contains a folder UUID, `folderPath` its readable path. A field without a value is omitted.
 `table ls --json` returns `{id, tables}` with the table number for `--table`.
 

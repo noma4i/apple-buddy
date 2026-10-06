@@ -49,7 +49,8 @@ struct List: ParsableCommand {
         abstract: "List notes",
         discussion: """
         Prints one note UUID per line, without titles or other fields.
-        With --json prints an array of {id, url, title, folder, folderPath, modified, pinned, protected, tags, attachments, urls}.
+        With --json prints an array of {id, url, title, folder, folderPath, modified, pinned, protected, shared, tags, attachments, urls}.
+        Shared and locked notes are listed and cannot be changed by nb.
         Dates are in ISO 8601. Locked notes have no urls. Newest notes come first.
         --folder includes subfolders. Deleted notes are listed only with --folder "Recently Deleted".
         Without --folder lists the notes of every folder, which is slow with many notes.
