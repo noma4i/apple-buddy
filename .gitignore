@@ -15,3 +15,4 @@ xcuserdata/
 *.provisionprofile
 /exports/
 /backups/
+!docs/*.md
