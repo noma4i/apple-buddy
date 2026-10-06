@@ -243,6 +243,7 @@ final class HelpTests: XCTestCase {
             ("folders", ["--tree", "totalNoteCount", "parentPath"]),
             ("sync", ["sentObjects", "Sent N objects"]),
             ("stats", ["--no-recursive"]),
+            ("open", ["--window", "Accessibility"]),
         ] {
             let (code, text) = try output([command, "help"])
             XCTAssertEqual(code, 0, text)
