@@ -218,6 +218,16 @@ final class HelpTests: XCTestCase {
         XCTAssertTrue(output.contains("all searches document contents automatically"))
     }
 
+    func testListAndSearchHelpExplainShowAndChars() throws {
+        for command in ["ls", "search"] {
+            let (code, text) = try output([command, "help"])
+            XCTAssertEqual(code, 0, text)
+            for needle in ["--show", "--chars", "--limit", "--offset", "textLength", "without runs"] {
+                XCTAssertTrue(text.contains(needle), "\(command): \(needle)\n\(text)")
+            }
+        }
+    }
+
     func testWritesAlwaysExplainCloudAcknowledgement() throws {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: ".build/debug/nb")

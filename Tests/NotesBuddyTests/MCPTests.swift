@@ -100,6 +100,14 @@ final class MCPTests: XCTestCase {
         let invocation = try search.invocation(["query": "help", "limit": 2], definitions: definitions)
         XCTAssertTrue(try NotesBuddy.parseAsRoot(invocation.arguments) is Search)
         XCTAssertThrowsError(try search.invocation(["query": "help", "limit": "2"], definitions: definitions))
+        XCTAssertEqual(search.types["chars"], "integer")
+        XCTAssertEqual(search.types["show"], "boolean")
+        let notes = try XCTUnwrap(definitions.first { $0.tool.name == "ls" })
+        XCTAssertEqual(notes.types["limit"], "integer")
+        XCTAssertEqual(notes.types["offset"], "integer")
+        XCTAssertEqual(notes.types["chars"], "integer")
+        XCTAssertEqual(notes.types["show"], "boolean")
+        XCTAssertTrue(try NotesBuddy.parseAsRoot(try notes.invocation(["folder": "Work", "show": true, "chars": 100, "limit": 3], definitions: definitions).arguments) is List)
     }
 
     func testOpenCommandAcceptsUUIDPrefixesAndHasHelp() throws {

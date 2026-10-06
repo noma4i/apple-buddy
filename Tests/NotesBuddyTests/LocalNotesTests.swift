@@ -160,12 +160,12 @@ final class LocalNotesTests: XCTestCase {
         XCTAssertTrue(try store.html(forNote: id).contains("bold"))
         try store.moveNote(id, toFolder: child)
         XCTAssertEqual(try NBNotes(url: database, readOnly: true).readNote(id)["folderPath"] as? String, "Native destination/Nested")
-        XCTAssertEqual(try store.listNotes(["folder": child]).count, 1)
-        XCTAssertEqual(try store.listNotes(["folder": folder]).count, 1)
+        XCTAssertEqual(try store.notes(["folder": child]).count, 1)
+        XCTAssertEqual(try store.notes(["folder": folder]).count, 1)
         XCTAssertThrowsError(try store.removeFolder(folder))
         XCTAssertThrowsError(try store.removeFolder(child))
         try store.deleteNote(id)
-        XCTAssertEqual(try store.listNotes(["folder": child]).count, 0)
+        XCTAssertEqual(try store.notes(["folder": child]).count, 0)
         try store.removeFolder(child)
         try store.removeFolder(folder)
         let folders = try NBNotes(url: database, readOnly: true).listFolders()
@@ -381,13 +381,32 @@ final class LocalNotesTests: XCTestCase {
 
     private func ids(_ notes: [[AnyHashable: Any]]) -> Set<String> { Set(notes.compactMap { $0["id"] as? String }) }
 
+    private func runCLI(_ arguments: [String], isolated: Bool = true) throws -> (Int32, String, String) {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: ".build/debug/nb")
+        process.arguments = arguments
+        if isolated {
+            var environment = ProcessInfo.processInfo.environment
+            environment["CFFIXED_USER_HOME"] = directory.path
+            process.environment = environment
+        }
+        let output = Pipe(), errors = Pipe()
+        process.standardOutput = output
+        process.standardError = errors
+        try process.run()
+        let text = String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        let error = String(decoding: errors.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        process.waitUntilExit()
+        return (process.terminationStatus, text, error)
+    }
+
     func testFolderScopeIncludesSubfoldersInListSearchAndCounts() throws {
         let store = try NBNotes(url: database, readOnly: false)
         let sub = try store.createFolder("Sub", parent: "Fixture")
         let deep = try store.createFolder("Deep", parent: sub)
         let nested = try store.createNote(inFolder: deep, html: "<h1>Nested needle</h1>")
-        XCTAssertEqual(ids(try store.listNotes(["folder": "Fixture"])), [noteID, targetID, nested])
-        XCTAssertEqual(ids(try store.listNotes(["folder": "Fixture/Sub"])), [nested])
+        XCTAssertEqual(ids(try store.notes(["folder": "Fixture"])), [noteID, targetID, nested])
+        XCTAssertEqual(ids(try store.notes(["folder": "Fixture/Sub"])), [nested])
         XCTAssertEqual(ids(try XCTUnwrap(store.search("needle", options: ["folder": "Fixture", "field": "title"])["notes"] as? [[AnyHashable: Any]])), [nested])
         XCTAssertEqual(try store.search("needle", options: ["folder": "Fixture/Sub/Deep", "field": "title"])["total"] as? Int, 1)
         XCTAssertEqual(try store.search("Fixture", options: ["folder": "Fixture/Sub", "field": "title"])["total"] as? Int, 0)
@@ -414,7 +433,7 @@ final class LocalNotesTests: XCTestCase {
         try context.save()
         context.reset()
         let reader = try NBNotes(url: database, readOnly: true)
-        let listed = try reader.listNotes([:])
+        let listed = try reader.notes([:])
         XCTAssertEqual(ids(listed), [noteID, targetID, locked])
         XCTAssertFalse(ids(listed).contains(stubID))
         let counted = try reader.listFolders().reduce(0) { $0 + (($1["noteCount"] as? Int) ?? 0) }
@@ -424,9 +443,9 @@ final class LocalNotesTests: XCTestCase {
         XCTAssertEqual(found["skippedProtected"] as? Int, 1)
         XCTAssertEqual(try reader.search(stubUUID, options: ["field": "id"])["total"] as? Int, 0)
         XCTAssertEqual(try reader.noteIDs(withTag: "shared"), [targetID])
-        XCTAssertEqual(ids(try reader.listNotes(["tag": "shared"])), [targetID])
+        XCTAssertEqual(ids(try reader.notes(["tag": "shared"])), [targetID])
         let trash = try XCTUnwrap(try reader.listFolders().first { ($0["deletedNoteCount"] as? Int ?? 0) > 0 }?["id"] as? String)
-        XCTAssertEqual(ids(try reader.listNotes(["folder": trash])), [removed])
+        XCTAssertEqual(ids(try reader.notes(["folder": trash])), [removed])
         XCTAssertEqual(ids(try XCTUnwrap(reader.search("needle", options: ["folder": trash, "field": "title"])["notes"] as? [[AnyHashable: Any]])), [removed])
     }
 
@@ -435,7 +454,7 @@ final class LocalNotesTests: XCTestCase {
         _ = try store.editNote(noteID, operation: "table-new", options: ["rows": 1, "columns": 1])
         _ = try store.editNote(noteID, operation: "tag-add", options: ["name": "shape"])
         _ = try store.editNote(noteID, operation: "pin", options: [:])
-        let listed = try XCTUnwrap(store.listNotes(["folder": "Fixture"]).first { $0["id"] as? String == noteID })
+        let listed = try XCTUnwrap(store.notes(["folder": "Fixture"]).first { $0["id"] as? String == noteID })
         let found = try XCTUnwrap((store.search("Fixture", options: ["field": "title"])["notes"] as? [[AnyHashable: Any]])?.first { $0["id"] as? String == noteID })
         let shown = try store.readNote(noteID)
         let keys = Set(listed.keys.compactMap { $0 as? String })
@@ -454,6 +473,99 @@ final class LocalNotesTests: XCTestCase {
         XCTAssertEqual(Set(table.keys), ["id", "note", "type", "kind", "viewSize"])
         XCTAssertFalse(attachments.contains { $0["identifier"] != nil })
         XCTAssertEqual(attachments.first { $0["kind"] as? String == "file" }?["available"] as? Bool, false)
+    }
+
+    func testShowOptionAddsNoteContentToListAndSearch() throws {
+        let store = try NBNotes(url: database, readOnly: false)
+        _ = try store.editNote(noteID, operation: "table-new", options: ["rows": 1, "columns": 1])
+        _ = try store.editNote(noteID, operation: "link-add", options: ["target": targetID!])
+        let shown = try store.readNote(noteID)
+        let plain = try XCTUnwrap(try store.notes(["folder": "Fixture"]).first { $0["id"] as? String == noteID })
+        XCTAssertNil(plain["text"])
+        let listed = try XCTUnwrap(try store.notes(["folder": "Fixture", "show": true]).first { $0["id"] as? String == noteID })
+        let found = try XCTUnwrap((store.search("Fixture", options: ["field": "title", "show": true])["notes"] as? [[AnyHashable: Any]])?.first { $0["id"] as? String == noteID })
+        let expected = Set(shown.keys.compactMap { $0 as? String }).subtracting(["runs"]).union(["textLength"])
+        XCTAssertEqual(Set(listed.keys.compactMap { $0 as? String }), expected)
+        XCTAssertEqual(Set(found.keys.compactMap { $0 as? String }).subtracting(["excerpt", "matchType", "matchedFields"]), expected)
+        XCTAssertEqual(listed["text"] as? String, shown["text"] as? String)
+        XCTAssertEqual(listed["textLength"] as? Int, (shown["text"] as? NSString)?.length)
+        XCTAssertEqual(listed["tables"] as? NSObject, shown["tables"] as? NSObject)
+        XCTAssertEqual(listed["links"] as? NSObject, shown["links"] as? NSObject)
+        XCTAssertEqual(found["text"] as? String, shown["text"] as? String)
+    }
+
+    func testCharsOptionTruncatesTextAndKeepsFullLength() throws {
+        let store = try NBNotes(url: database, readOnly: false)
+        let long = try store.createNote(inFolder: "Fixture", html: "<h1>Long</h1><p>\(String(repeating: "a", count: 295))</p>")
+        let emoji = try store.createNote(inFolder: "Fixture", html: "<h1>ab😀cd</h1>")
+        let notes = try store.notes(["folder": "Fixture", "show": true, "chars": 3])
+        let cut = try XCTUnwrap(notes.first { $0["id"] as? String == long })
+        XCTAssertEqual(cut["text"] as? String, "Lon")
+        XCTAssertEqual(cut["textLength"] as? Int, 301)
+        XCTAssertEqual(try XCTUnwrap(notes.first { $0["id"] as? String == emoji })["text"] as? String, "ab😀")
+        let whole = try XCTUnwrap(try store.notes(["folder": "Fixture", "show": true, "chars": 1000]).first { $0["id"] as? String == long })
+        XCTAssertEqual((whole["text"] as? NSString)?.length, 301)
+        let searched = try XCTUnwrap((store.search("Long", options: ["field": "title", "show": true, "chars": 4])["notes"] as? [[AnyHashable: Any]])?.first)
+        XCTAssertEqual(searched["text"] as? String, "Long")
+        XCTAssertEqual(searched["textLength"] as? Int, 301)
+    }
+
+    func testListPaginatesLikeSearch() throws {
+        let store = try NBNotes(url: database, readOnly: false)
+        _ = try store.createNote(inFolder: "Fixture", html: "<h1>Third</h1>")
+        let all = try store.listNotes(["folder": "Fixture"])
+        XCTAssertEqual((all["notes"] as? [Any])?.count, 3)
+        XCTAssertEqual(all["total"] as? Int, 3)
+        let page = try store.listNotes(["folder": "Fixture", "limit": 2, "offset": 1])
+        let pageIDs = (page["notes"] as? [[AnyHashable: Any]])?.compactMap { $0["id"] as? String }
+        XCTAssertEqual(pageIDs, Array((all["notes"] as? [[AnyHashable: Any]])!.compactMap { $0["id"] as? String }[1...]))
+        XCTAssertEqual(page["total"] as? Int, 3)
+        XCTAssertEqual((try store.listNotes(["folder": "Fixture", "offset": 5])["notes"] as? [Any])?.count, 0)
+        XCTAssertEqual(message(try store.listNotes(["folder": "Fixture", "limit": 0])), "Limit must be positive and offset nonnegative")
+    }
+
+    func testCLIShowOptionPrintsNoteBlocks() throws {
+        let store = try NBNotes(url: database, readOnly: false)
+        _ = try store.editNote(noteID, operation: "tag-add", options: ["name": "blocks"])
+        let container = directory.appendingPathComponent("Library/Group Containers/group.com.apple.notes")
+        try FileManager.default.createDirectory(at: container, withIntermediateDirectories: true)
+        XCTAssertEqual(try runCLI(["snapshot-db", container.appendingPathComponent("NoteStore.sqlite").path, "--database", database.path], isolated: false).0, 0)
+        let publicIDs = try NBNotes(url: database, readOnly: true).publicIdentifiers(forIDs: [noteID, targetID])
+        let publicNoteID = try XCTUnwrap(publicIDs[noteID])
+        let listed = try runCLI(["ls", "--folder", "Fixture", "--show", "--limit", "1", "--offset", "1"])
+        XCTAssertEqual(listed.0, 0, listed.2)
+        let blocks = listed.1.components(separatedBy: "\n---\n")
+        XCTAssertEqual(blocks.count, 1, listed.1)
+        XCTAssertEqual(listed.2, "1 of 2 notes\n")
+        let found = try runCLI(["search", "Fixtur", "--field", "title", "--show", "--chars", "12"])
+        XCTAssertEqual(found.0, 0, found.2)
+        let lines = found.1.components(separatedBy: "\n")
+        guard lines.count >= 8 else { return XCTFail(found.1) }
+        XCTAssertEqual(lines[0], publicNoteID)
+        XCTAssertEqual(lines[1], "Title: Fixture")
+        XCTAssertEqual(lines[2], "Folder: Fixture")
+        XCTAssertTrue(lines[3].hasPrefix("Modified: "), found.1)
+        XCTAssertEqual(lines[4], "Match: exact in title")
+        XCTAssertEqual(lines[5], "")
+        XCTAssertEqual(lines[6], "Fixture")
+        XCTAssertEqual(lines[7], "Alph")
+        XCTAssertTrue(found.1.contains("\n(first 12 of "), found.1)
+        XCTAssertTrue(found.1.contains("\nTags: #blocks\n"), found.1)
+        XCTAssertFalse(found.1.contains("---"), found.1)
+        let json = try runCLI(["search", "Fixtur", "--field", "title", "--show", "--json"])
+        let value = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(json.1.utf8)) as? [String: Any])
+        let note = try XCTUnwrap((value["notes"] as? [[String: Any]])?.first)
+        XCTAssertNotNil(note["text"])
+        XCTAssertNotNil(note["textLength"])
+        XCTAssertNil(note["runs"])
+        let plain = try runCLI(["ls", "--folder", "Fixture"])
+        XCTAssertEqual(plain.1.split(separator: "\n").count, 2)
+        XCTAssertEqual(plain.2, "2 notes\n")
+        let invalid = try runCLI(["search", "Fixtur", "--chars", "12"])
+        XCTAssertEqual(invalid.0, 64)
+        XCTAssertTrue(invalid.2.contains("--chars needs --show"), invalid.2)
+        let invalidList = try runCLI(["ls", "--limit", "0"])
+        XCTAssertEqual(invalidList.0, 64)
     }
 
     func testSearchSeparatesNoteLinksFromWebAddresses() throws {
@@ -570,10 +682,10 @@ final class LocalNotesTests: XCTestCase {
     func testImportCommitsAllObjectsOrNoneAndDoesNotDuplicate() throws {
         let store = try NBNotes(url: database, readOnly: false)
         let identifier = UUID().uuidString
-        let before = try store.listNotes(["folder": "Fixture"]).count
+        let before = try store.notes(["folder": "Fixture"]).count
         XCTAssertThrowsError(try store.importNote(withIdentifier: identifier, folder: "Fixture", html: "<h1>Imported</h1>", tags: "first,bad!", files: []))
         XCTAssertThrowsError(try store.importNote(withIdentifier: identifier, folder: "Fixture", html: "<h1>Imported</h1>", tags: "first", files: [directory.appendingPathComponent("missing.pdf").path]))
-        XCTAssertEqual(try NBNotes(url: database, readOnly: true).listNotes(["folder": "Fixture"]).count, before)
+        XCTAssertEqual(try NBNotes(url: database, readOnly: true).notes(["folder": "Fixture"]).count, before)
         let imported = try store.importNote(withIdentifier: identifier, folder: "Fixture", html: "<h1>Imported</h1>", tags: "first/second", files: [])
         XCTAssertEqual(imported["imported"] as? Bool, true)
         let id = try XCTUnwrap(imported["id"] as? String)
@@ -581,7 +693,7 @@ final class LocalNotesTests: XCTestCase {
         let repeated = try store.importNote(withIdentifier: identifier, folder: "Fixture", html: "<p>Must not overwrite</p>", tags: "other", files: [])
         XCTAssertEqual(repeated["id"] as? String, id)
         XCTAssertEqual(repeated["imported"] as? Bool, false)
-        XCTAssertEqual(try store.listNotes(["folder": "Fixture"]).count, before + 1)
+        XCTAssertEqual(try store.notes(["folder": "Fixture"]).count, before + 1)
         XCTAssertTrue((try store.readNote(id)["text"] as? String)?.contains("Imported") == true)
     }
 
@@ -767,7 +879,7 @@ final class LocalNotesTests: XCTestCase {
 
     func testNativeBooleanFieldsSerializeAsJSONBooleans() throws {
         let store = try NBNotes(url: database, readOnly: true)
-        let listed = try XCTUnwrap(store.listNotes(["folder": "Fixture"]).first)
+        let listed = try XCTUnwrap(store.notes(["folder": "Fixture"]).first)
         let values = [try store.readNote(noteID), listed]
         for value in values {
             let bytes = try JSONSerialization.data(withJSONObject: value, options: [.sortedKeys])
@@ -818,7 +930,7 @@ final class LocalNotesTests: XCTestCase {
         let uuid = try XCTUnwrap(store.publicIdentifiers(forIDs: [noteID])[noteID])
         let expected = "applenotes://showNote?identifier=" + uuid
         XCTAssertEqual(try store.readNote(noteID)["url"] as? String, expected)
-        XCTAssertEqual(try store.listNotes(["folder": "Fixture"]).first { $0["id"] as? String == noteID }?["url"] as? String, expected)
+        XCTAssertEqual(try store.notes(["folder": "Fixture"]).first { $0["id"] as? String == noteID }?["url"] as? String, expected)
         let found = try store.search("Fixture", options: ["field": "title"])
         XCTAssertEqual((found["notes"] as? [[String: Any]])?.first?["url"] as? String, expected)
     }
@@ -855,7 +967,7 @@ final class LocalNotesTests: XCTestCase {
         XCTAssertEqual((note["attachments"] as? [Any])?.count, 0)
         let found = try store.search("example.test", options: ["field": "url"])
         XCTAssertEqual((found["notes"] as? [[String: Any]])?.first?["id"] as? String, id)
-        let listed = try store.listNotes(["folder": "Fixture"]).first { $0["id"] as? String == id }
+        let listed = try store.notes(["folder": "Fixture"]).first { $0["id"] as? String == id }
         XCTAssertEqual((listed?["urls"] as? [[String: Any]])?.first?["url"] as? String, "https://example.test/invoice.pdf")
     }
 
@@ -870,7 +982,7 @@ final class LocalNotesTests: XCTestCase {
         let note = try context.existingObject(with: objectID)
         note.setValue(true, forKey: "isPasswordProtected")
         try context.save()
-        let listed = try XCTUnwrap(store.listNotes(["folder": "Fixture"]).first { $0["id"] as? String == id })
+        let listed = try XCTUnwrap(store.notes(["folder": "Fixture"]).first { $0["id"] as? String == id })
         let attachment = try XCTUnwrap((listed["attachments"] as? [[String: Any]])?.first)
         XCTAssertEqual(attachment["available"] as? Bool, true)
         XCTAssertEqual(attachment["exportable"] as? Bool, false)
@@ -975,27 +1087,9 @@ final class LocalNotesTests: XCTestCase {
         let before = try store.readNote(id)
         let container = directory.appendingPathComponent("Library/Group Containers/group.com.apple.notes")
         try FileManager.default.createDirectory(at: container, withIntermediateDirectories: true)
-        func run(_ arguments: [String], isolated: Bool = true) throws -> (Int32, String, String) {
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: ".build/debug/nb")
-            process.arguments = arguments
-            if isolated {
-                var environment = ProcessInfo.processInfo.environment
-                environment["CFFIXED_USER_HOME"] = directory.path
-                process.environment = environment
-            }
-            let output = Pipe(), errors = Pipe()
-            process.standardOutput = output
-            process.standardError = errors
-            try process.run()
-            let text = String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-            let error = String(decoding: errors.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-            process.waitUntilExit()
-            return (process.terminationStatus, text, error)
-        }
-        XCTAssertEqual(try run(["snapshot-db", container.appendingPathComponent("NoteStore.sqlite").path, "--database", database.path], isolated: false).0, 0)
+        XCTAssertEqual(try runCLI(["snapshot-db", container.appendingPathComponent("NoteStore.sqlite").path, "--database", database.path], isolated: false).0, 0)
         let destination = directory.appendingPathComponent("exported")
-        let result = try run(["attachments", "export", id, "--directory", destination.path])
+        let result = try runCLI(["attachments", "export", id, "--directory", destination.path])
         XCTAssertEqual(result.0, 0, result.2)
         guard result.0 == 0 else { return }
         let paths = result.1.split(separator: "\n").map(String.init)
@@ -1004,15 +1098,15 @@ final class LocalNotesTests: XCTestCase {
             let file = URL(fileURLWithPath: path)
             XCTAssertEqual(try Data(contentsOf: file), Data(file.lastPathComponent.utf8))
         }
-        let again = try run(["attachments", "export", id, "--directory", destination.path])
+        let again = try runCLI(["attachments", "export", id, "--directory", destination.path])
         XCTAssertEqual(again.0, 1, again.2)
         XCTAssertFalse(again.2.contains("Usage:"), again.2)
         XCTAssertTrue(again.1.isEmpty)
-        let empty = try run(["attachments", "export", targetID, "--directory", directory.appendingPathComponent("empty-export").path])
+        let empty = try runCLI(["attachments", "export", targetID, "--directory", directory.appendingPathComponent("empty-export").path])
         XCTAssertEqual(empty.0, 1, empty.2)
         XCTAssertTrue(empty.2.contains("note has no files to export"), empty.2)
         XCTAssertFalse(FileManager.default.fileExists(atPath: directory.appendingPathComponent("empty-export").path))
-        let jsonResult = try run(["attachments", "export", id, "--directory", directory.appendingPathComponent("json-export").path, "--json"])
+        let jsonResult = try runCLI(["attachments", "export", id, "--directory", directory.appendingPathComponent("json-export").path, "--json"])
         XCTAssertEqual(jsonResult.0, 0, jsonResult.2)
         let json = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(jsonResult.1.utf8)) as? [String: Any])
         XCTAssertEqual((json["files"] as? [[String: Any]])?.count, 2)
@@ -1328,5 +1422,11 @@ final class LocalNotesTests: XCTestCase {
         let missing = try store.search("absent", options: ["field": "all", "limit": 10])
         XCTAssertEqual((missing["notes"] as? [[String: Any]])?.count, 0)
         XCTAssertThrowsError(try store.search("", options: ["field": "all", "limit": 10]))
+    }
+}
+
+extension NBNotes {
+    func notes(_ options: [String: Any]) throws -> [[AnyHashable: Any]] {
+        try XCTUnwrap(listNotes(options)["notes"] as? [[AnyHashable: Any]])
     }
 }

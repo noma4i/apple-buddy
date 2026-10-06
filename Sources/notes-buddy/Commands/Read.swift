@@ -53,27 +53,71 @@ struct List: ParsableCommand {
         Dates are in ISO 8601. Locked notes have no urls. Newest notes come first.
         --folder includes subfolders. Deleted notes are listed only with --folder "Recently Deleted".
         Without --folder lists the notes of every folder, which is slow with many notes.
+        --show prints each note in full, the UUID, title, folder and date, then the show text.
+        With --json, --show adds the show fields without runs: text, textLength, tables, links and cloud state.
+        --chars N keeps the first N characters of each text, textLength keeps the full length.
+        --limit and --offset page the list, stderr reports the returned and total counts.
 
         EXAMPLES
           nb ls --folder Work
-          nb ls --json
+          nb ls --folder Work --show --limit 5
+          nb ls --folder Work --show --chars 2000 --json
         """
     )
 
     @Option(help: ArgumentHelp("Only notes of this folder and its subfolders, by \(ReferenceHelp.folder)")) var folder: String?
     @Option(help: ArgumentHelp("Only notes with exactly this native tag, \(ReferenceHelp.tag)")) var tag: String?
+    @OptionGroup var reading: ReadingOptions
 
     func run() throws {
-        var options: [String: Any] = [:]
+        var options = try reading.options()
         if let folder { options["folder"] = folder }
         if let tag { options["tag"] = tag }
-        let notes = try openLocalNotes(readOnly: true).listNotes(options)
-        let ids = try notes.map { note in
-            guard let id = note["id"] as? String else { throw NotesError(description: "Notes returned a note without an id") }
-            return id
+        let result = try openLocalNotes(readOnly: true).listNotes(options)
+        guard let notes = result["notes"] as? [[String: Any]], let total = result["total"] as? Int else { throw NotesError(description: "Notes returned invalid note list") }
+        try output.write(notes, text: try reading.render(notes))
+        output.summary(reading.limit == nil && reading.offset == 0 ? "\(notes.count) notes" : "\(notes.count) of \(total) notes")
+    }
+}
+
+struct ReadingOptions: ParsableArguments {
+    @Flag(help: "Print each note in full instead of only its UUID") var show = false
+    @Option(help: "With --show, keep only the first N characters of each note text") var chars: Int?
+    @Option(help: "Maximum number of notes") var limit: Int?
+    @Option(help: "Skip this many notes") var offset = 0
+
+    func options() throws -> [String: Any] {
+        if let limit, limit <= 0 { throw ValidationError("--limit must be positive") }
+        guard offset >= 0 else { throw ValidationError("--offset must be nonnegative") }
+        if let chars, chars <= 0 { throw ValidationError("--chars must be positive") }
+        if chars != nil && !show { throw ValidationError("--chars needs --show") }
+        var options: [String: Any] = ["offset": offset, "show": show]
+        if let limit { options["limit"] = limit }
+        if let chars { options["chars"] = chars }
+        return options
+    }
+
+    func render(_ notes: [[String: Any]]) throws -> String {
+        guard show else {
+            return try notes.map { note in
+                guard let id = note["id"] as? String else { throw NotesError(description: "Notes returned a note without an id") }
+                return id
+            }.joined(separator: "\n")
         }
-        try output.write(notes, text: ids.joined(separator: "\n"))
-        output.summary("\(notes.count) notes")
+        return try notes.map { note in
+            guard let id = note["id"] as? String, let title = note["title"] as? String, let text = note["text"] as? String,
+                  let length = note["textLength"] as? Int else { throw NotesError(description: "Notes returned invalid note data") }
+            var lines = [id, "Title: \(title)"]
+            if let folder = note["folderPath"] as? String { lines.append("Folder: \(folder)") }
+            if let modified = note["modified"] as? String { lines.append("Modified: \(modified)") }
+            if let fields = note["matchedFields"] as? [String], let match = note["matchType"] as? String {
+                lines.append("Match: \(match) in " + fields.joined(separator: ", "))
+            }
+            lines.append("")
+            lines.append(try renderNote(note))
+            if (text as NSString).length < length { lines.append("(first \((text as NSString).length) of \(length) characters)") }
+            return lines.joined(separator: "\n")
+        }.joined(separator: "\n---\n")
     }
 }
 

@@ -171,8 +171,14 @@ nb search "wekend" --field title
 nb search "Invoice number" --field document
 nb search "report.pdf" --field attachment
 nb search "budget" --folder Work --limit 20 --offset 20
+nb search invoice --show --limit 5
+nb ls --folder Work --show --chars 2000 --json
 nb ls --tag invoices
 ```
+
+`--show` in `search` and `ls` prints each note in full in 1 call: UUID, title, folder, date, matched fields and the `show` text.
+With `--json`, `--show` adds the `show` fields without `runs`: `text`, `textLength`, `tables`, `links` and cloud state.
+`--chars N` keeps the first N characters of each text, `textLength` keeps the full length. `ls` pages with `--limit` and `--offset`.
 
 `--field` accepts `all` (default), `id`, `title`, `text`, `tag`, `link`, `url`, `attachment` or `document`.
 `link` finds links between notes, `url` finds web addresses. `id` matches exactly. `ls --tag` matches the exact tag, `--field tag` is fuzzy.
@@ -238,6 +244,7 @@ Invalid commands return a nonzero exit code and a help hint. Synchronization fai
 | Default stdout | Commands |
 | --- | --- |
 | Note UUIDs, 1 per line | `search`, `ls`, note writes, import |
+| Note blocks separated by `---` | `search --show`, `ls --show` |
 | Folder UUIDs, paths and counts | `folders`, `stats` |
 | Affected folder UUID | Folder writes |
 | Saved paths | Attachment export, snapshots |

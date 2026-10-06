@@ -595,11 +595,37 @@ static void NBRequire(BOOL valid, NSString *message) {
     return summary;
 }
 
-- (NSArray<NSDictionary *> *)listNotes:(NSDictionary *)options error:(NSError **)error {
+- (NSMutableDictionary *)readingNote:(NSManagedObject *)note options:(NSDictionary *)options {
+    if (![options[@"show"] boolValue]) return [self summarizeNote:note];
+    NSMutableDictionary *result = [[self describeNote:note] mutableCopy];
+    [result removeObjectForKey:@"runs"];
+    NSString *text = result[@"text"];
+    result[@"textLength"] = @(text.length);
+    if (options[@"chars"] && [options[@"chars"] unsignedIntegerValue] < text.length) {
+        NSRange kept = [text rangeOfComposedCharacterSequencesForRange:NSMakeRange(0, [options[@"chars"] unsignedIntegerValue])];
+        result[@"text"] = [text substringWithRange:kept];
+    }
+    return result;
+}
+
+- (void)requirePaging:(NSDictionary *)options {
+    NSInteger limit = options[@"limit"] ? [options[@"limit"] integerValue] : NSIntegerMax;
+    NBRequire(limit > 0 && [options[@"offset"] integerValue] >= 0, @"Limit must be positive and offset nonnegative");
+}
+
+- (NSArray *)page:(NSArray *)items options:(NSDictionary *)options {
+    [self requirePaging:options];
+    NSUInteger limit = options[@"limit"] ? [options[@"limit"] unsignedIntegerValue] : items.count;
+    NSUInteger start = MIN([options[@"offset"] unsignedIntegerValue], items.count);
+    return [items subarrayWithRange:NSMakeRange(start, MIN(limit, items.count - start))];
+}
+
+- (NSDictionary *)listNotes:(NSDictionary *)options error:(NSError **)error {
     @try {
+        NSArray *notes = [self notesForReadingInFolder:options[@"folder"] tag:options[@"tag"]];
         NSMutableArray *result = [NSMutableArray array];
-        for (NSManagedObject *note in [self notesForReadingInFolder:options[@"folder"] tag:options[@"tag"]]) [result addObject:[self summarizeNote:note]];
-        return result;
+        for (NSManagedObject *note in [self page:notes options:options]) [result addObject:[self readingNote:note options:options]];
+        return @{@"notes":result, @"total":@(notes.count)};
     } @catch (NSException *exception) { if (error) *error = NBError(exception.reason); return nil; }
 }
 
@@ -1236,7 +1262,9 @@ static void NBRequire(BOOL valid, NSString *message) {
         NSInteger offset = [options[@"offset"] integerValue];
         NBRequire([query stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet].length, @"Search query must not be empty");
         NBRequire([@[@"all", @"id", @"title", @"text", @"attachment", @"tag", @"link", @"url", @"document"] containsObject:field], @"Unknown search field");
-        NBRequire(limit > 0 && offset >= 0, @"Limit must be positive and offset nonnegative");
+        NSMutableDictionary *paging = [options mutableCopy];
+        paging[@"limit"] = @(limit);
+        [self requirePaging:paging];
         query = NBSearchText(query);
         if ([query hasPrefix:@"x-coredata://"]) {
             NSManagedObjectID *objectID = [_context.persistentStoreCoordinator managedObjectIDForURIRepresentation:[NSURL URLWithString:query]];
@@ -1355,12 +1383,11 @@ static void NBRequire(BOOL valid, NSString *message) {
             if (fields.count) [(bestMatch == 0 ? matches : fuzzyMatches) addObject:[@{@"id":record[@"id"], @"note":note, @"matchedFields":fields, @"excerpt":excerpt, @"matchType":bestMatch == 0 ? @"exact" : @"fuzzy"} mutableCopy]];
         }
         [matches addObjectsFromArray:fuzzyMatches];
-        NSUInteger start = MIN((NSUInteger)offset, matches.count);
-        NSArray *page = [matches subarrayWithRange:NSMakeRange(start, MIN((NSUInteger)limit, matches.count - start))];
+        NSArray *page = [self page:matches options:paging];
         for (NSMutableDictionary *item in page) {
             NSManagedObject *note = item[@"note"];
             [item removeObjectForKey:@"note"];
-            [item addEntriesFromDictionary:[self summarizeNote:note]];
+            [item addEntriesFromDictionary:[self readingNote:note options:options]];
         }
         return @{@"notes":page, @"total":@(matches.count), @"offset":@(offset), @"limit":@(limit), @"skippedProtected":@(protectedCount), @"unavailableDocuments":@(unavailableDocuments), @"scannedDocuments":@(scannedDocuments), @"cachedDocuments":@(cachedDocuments), @"documentErrors":documentErrors};
     } @catch (NSException *exception) {

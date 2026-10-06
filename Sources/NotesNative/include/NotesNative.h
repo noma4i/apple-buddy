@@ -27,7 +27,7 @@ FOUNDATION_EXPORT NSInteger NBNotesSyncInterruption(void);
 - (nullable NSDictionary *)searchNotes:(NSString *)query options:(NSDictionary *)options error:(NSError **)error;
 - (nullable NSDictionary *)editNote:(NSString *)identifier operation:(NSString *)operation options:(NSDictionary *)options error:(NSError **)error;
 - (nullable NSArray<NSDictionary *> *)listFolders:(NSError **)error;
-- (nullable NSArray<NSDictionary *> *)listNotes:(NSDictionary *)options error:(NSError **)error;
+- (nullable NSDictionary *)listNotes:(NSDictionary *)options error:(NSError **)error;
 - (nullable NSDictionary<NSString *, NSString *> *)finishedImports:(NSArray<NSString *> *)identifiers error:(NSError **)error;
 - (nullable NSString *)createFolder:(NSString *)name parent:(nullable NSString *)parent error:(NSError **)error;
 - (BOOL)removeFolder:(NSString *)folder error:(NSError **)error;

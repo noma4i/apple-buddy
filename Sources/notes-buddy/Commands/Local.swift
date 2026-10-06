@@ -305,37 +305,37 @@ struct Search: ParsableCommand {
         Locked notes are not searched, their number goes to stderr and skippedProtected.
         id matches exactly. tag, link and url search native tags, note links and web addresses.
         Without --limit prints the first 50 results. JSON total has the full count.
+        --show prints each match in full, the UUID, title, folder, date and matched fields, then the show text.
+        With --json, --show adds the show fields without runs: text, textLength, tables, links and cloud state.
+        --chars N keeps the first N characters of each text, textLength keeps the full length.
 
         EXAMPLES
           nb search invoice
+          nb search invoice --show --limit 5
           nb search "Invoice number" --field document
-          nb search project --field tag --json
+          nb search project --field tag --show --chars 2000 --json
         """)
     @Argument(help: "Nonempty text or id fragment to find") var query: String
     @Option(help: "all, id, title, text, attachment, tag, link, url or document") var field: Field = .all
     @Option(help: ArgumentHelp("Only notes of this folder and its subfolders, by \(ReferenceHelp.folder)")) var folder: String?
-    @Option(help: "Maximum number of results") var limit = 50
-    @Option(help: "Skip this many results") var offset = 0
+    @OptionGroup var reading: ReadingOptions
 
     func run() throws {
-        guard limit > 0 && offset >= 0 else { throw ValidationError("--limit must be positive and --offset nonnegative") }
-        var options: [String: Any] = ["field": field.rawValue, "limit": limit, "offset": offset]
+        var options = try reading.options()
+        options["field"] = field.rawValue
+        if options["limit"] == nil { options["limit"] = 50 }
         if let folder { options["folder"] = folder }
         let result = try openLocalNotes(readOnly: true).search(query, options: options)
         guard let notes = result["notes"] as? [[String: Any]] else { throw NotesError(description: "Notes returned invalid search results") }
-        let ids = try notes.map { note in
-            guard let id = note["id"] as? String else { throw NotesError(description: "Notes returned a search result without an id") }
-            return id
-        }
         if let errors = result["documentErrors"] as? [[String: String]] {
             for error in errors {
                 guard let attachment = error["attachment"], let message = error["error"] else { throw NotesError(description: "Notes returned invalid document diagnostics") }
                 FileHandle.standardError.write(Data("Document error: \(attachment) \(message)\n".utf8))
             }
         }
-        try output.write(result, text: ids.joined(separator: "\n"))
+        try output.write(result, text: try reading.render(notes))
         guard let total = result["total"] as? Int else { throw NotesError(description: "Notes returned invalid search count") }
-        output.summary("\(ids.count) of \(total) notes")
+        output.summary("\(notes.count) of \(total) notes")
         if let skipped = result["skippedProtected"] as? Int, skipped > 0 { output.summary("\(skipped) locked notes not searched") }
     }
 }

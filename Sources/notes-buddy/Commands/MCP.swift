@@ -17,7 +17,7 @@ struct MCPCommand: ParsableCommand {
         guard let executable = Bundle.main.executableURL else { throw ValidationError("Cannot locate the nb executable") }
         let commands = MCPCommands(executable: executable)
         let server = Server(name: "notes-buddy", version: NotesBuddy.releaseVersion,
-                            instructions: "Use search or ls to get note UUIDs. Unique prefixes need at least 8 characters. Folders accept a name, a path such as Work/Project or a UUID from folders. A folder filter in ls, search and stats includes subfolders. Tools return CLI JSON data. Writes wait for iCloud acknowledgement. Only open displays Notes. Export saves local files. Restore creates an isolated copy, never overwrites live Notes. Use help for command details.",
+                            instructions: "Use search or ls to get note UUIDs. Unique prefixes need at least 8 characters. Folders accept a name, a path such as Work/Project or a UUID from folders. A folder filter in ls, search and stats includes subfolders. ls and search with show return note text in one call, chars caps each text and limit caps the count. Tools return CLI JSON data. Writes wait for iCloud acknowledgement. Only open displays Notes. Export saves local files. Restore creates an isolated copy, never overwrites live Notes. Use help for command details.",
                             capabilities: .init(tools: .init()))
         let completed = DispatchSemaphore(value: 0)
         let outcome = MCPCompletion()
@@ -109,7 +109,7 @@ struct MCPToolCommand {
         var required: [Value] = []
         for argument in arguments {
             guard let name = argument.valueName else { continue }
-            let type = argument.kind == .flag ? "boolean" : (["row", "col", "table", "at", "limit", "offset"].contains(name) || (command.first == "attachments" && name == "size")) ? "integer" : "string"
+            let type = argument.kind == .flag ? "boolean" : (["row", "col", "table", "at", "limit", "offset", "chars"].contains(name) || (command.first == "attachments" && name == "size")) ? "integer" : "string"
             types[name] = type
             var property: [String: Value] = ["type": .string(type), "description": .string(argument.abstract ?? name)]
             if let values = argument.allValueStrings, !values.isEmpty { property["enum"] = .array(values.map(Value.string)) }
