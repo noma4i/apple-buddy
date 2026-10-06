@@ -341,7 +341,7 @@ struct AddReminder: ParsableCommand {
         }
         guard !target.readOnly else { throw NotesError(description: "List \(target.title) is read-only and cannot hold new reminders") }
         let item = ReminderItem(id: "", title: title, notes: fields.notes, listID: target.id, list: target.title, due: fields.due?.date, dueHasTime: fields.due?.hasTime ?? false, priority: fields.priority ?? 0,
-                                completed: false, completionDate: nil, url: fields.url, alarms: fields.alarm, location: try locationAlarm(arrive: fields.arrive, leave: fields.leave, radius: fields.radius),
+                                completed: false, completionDate: nil, url: fields.url, alarms: fields.alarm.sorted(), location: try locationAlarm(arrive: fields.arrive, leave: fields.leave, radius: fields.radius),
                                 recurrence: fields.recurrence(), flagged: fields.flag ?? false, tags: fields.tag.map(tagNames) ?? [], parentID: parentItem?.id,
                                 sectionID: try fields.section.map { try resolveSection(store, listID: target.id, $0).id }, created: nil, modified: nil)
         let saved = try store.saveReminders([item])[0]
@@ -397,7 +397,7 @@ struct EditReminder: ParsableCommand {
         if let priority = fields.priority { item.priority = priority }
         if let url = fields.url { item.url = url }
         if clearAlarms { item.alarms = [] }
-        if !fields.alarm.isEmpty { item.alarms = fields.alarm }
+        if !fields.alarm.isEmpty { item.alarms = fields.alarm.sorted() }
         if clearLocation { item.location = nil }
         if let location = try locationAlarm(arrive: fields.arrive, leave: fields.leave, radius: fields.radius) { item.location = location }
         if let recurrence = fields.recurrence() { item.recurrence = recurrence }

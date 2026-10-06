@@ -2,9 +2,11 @@ import ArgumentParser
 import Foundation
 
 enum ReferenceHelp {
-    static let note: ArgumentHelp = "Note UUID, unique prefix or applenotes URL from ls, search or new"
+    static let noteText = "Note UUID, unique prefix or applenotes URL from ls, search or new"
+    static let attachmentText = "Attachment file name, UUID or unique prefix from attachments ls"
+    static let note = ArgumentHelp(noteText)
     static let folder = "name, path such as Work/Project, UUID or unique prefix"
-    static let attachment: ArgumentHelp = "Attachment file name, UUID or unique prefix from attachments ls"
+    static let attachment = ArgumentHelp(attachmentText)
     static let tag = "name with or without #"
 }
 

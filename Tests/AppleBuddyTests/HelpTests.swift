@@ -29,6 +29,12 @@ final class HelpTests: XCTestCase {
         }
     }
 
+    func testNoHelpTextPrintsSwiftDebugDescriptions() {
+        let dump = AppleBuddy._dumpHelp()
+        XCTAssertFalse(dump.contains("ArgumentHelp("), "an ArgumentHelp value was interpolated into a help string")
+        XCTAssertFalse(dump.contains("ArgumentVisibility"), "a Swift debug description reached the help text")
+    }
+
     func testMCPHelpDoesNotPrintAnEmptyOptionsSection() throws {
         let (code, text) = try output(["mcp", "help"])
         XCTAssertEqual(code, 0, text)
@@ -247,7 +253,8 @@ final class HelpTests: XCTestCase {
         ] {
             let (code, text) = try output([command, "help"])
             XCTAssertEqual(code, 0, text)
-            for needle in needles { XCTAssertTrue(text.contains(needle), "\(command): \(needle)\n\(text)") }
+            let flat = text.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+            for needle in needles { XCTAssertTrue(flat.contains(needle), "\(command): \(needle)\n\(text)") }
         }
     }
 

@@ -33,12 +33,12 @@ abdy calendar rm "$event" --occurrence 2026-10-13T09:30:00+11:00 --span future
 Dates are ISO 8601: `2026-10-07T09:00`, `2026-10-07T09:00:00+11:00` or `2026-10-07` for a whole day. Output uses the local time zone.
 Lists and calendars are selected by name, UUID or a unique prefix of 8 characters. An ambiguous name lists the candidates with their accounts.
 Reminders and events are selected by UUID or a unique prefix. Event prefixes match events from 1 year ago to 2 years ahead.
-`--alarm` is minutes before the due date or start, repeatable.
+`--alarm` is minutes before the due date or start, repeatable. Alarms are always listed in ascending order.
 Location reminders: `--arrive "place or address"` or `--leave "..."` with `--radius` meters (default 100). The place is geocoded, a coordinate pair is used as is: `--arrive=-33.8688,151.2093`. `edit --clear-location` removes it. `--repeat daily|weekly|monthly|yearly` with `--interval`, `--until` or `--count`.
 A repeating event needs `--occurrence` from `events --json` and `--span this` or `--span future` for `edit` and `rm`. Future edits start a new series with a new UUID.
 All-day events include both `--start` and `--end` days. Read-only calendars such as subscriptions and holidays are listed and refuse writes.
 Attendees are shown by `calendar show` but cannot be invited. Reminders and Calendar have no trash: `rm` deletes for good.
-`done`, `undone`, `mv`, `rm`, `flag`, `unflag` and `tags` take many ids or `-` for ids from stdin, check every id first and save once.
+`done` on a repeating reminder leaves the original open with its next due date and creates a completed copy with a new id. `done`, `undone`, `mv`, `rm`, `flag`, `unflag` and `tags` take many ids or `-` for ids from stdin, check every id first and save once.
 
 Flags: `flag`, `unflag`, `add --flag`, `edit --flag` or `--no-flag`, `ls --flagged`.
 Tags: `--tag "errands, urgent"` on `add` replaces the tags, `tags <id> --add` and `--remove` change them, `tags` alone lists every tag with its count, `ls --tag errands` filters. Names are written with or without `#`.

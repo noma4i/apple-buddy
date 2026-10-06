@@ -31,11 +31,15 @@ func openLocalNotes(readOnly: Bool) throws -> NBNotes {
 }
 
 func requireReadableDatabase(_ url: URL) throws {
+    try requireReadable(url, what: "the Notes database")
+}
+
+func requireReadable(_ url: URL, what: String) throws {
     let descriptor = open(url.path, O_RDONLY)
     if descriptor >= 0 { close(descriptor); return }
     guard errno == EPERM || errno == EACCES else { return }
     let holder = ProcessInfo.processInfo.environment["ABDY_IN_APP"] != nil ? "Abdy.app (\(AppBundle.bundle.path))" : "this terminal application"
-    throw NotesError(description: "macOS blocks \(holder) from reading the Notes database \(url.path). Allow it in System Settings, Privacy and Security, Full Disk Access, then run the command again")
+    throw NotesError(description: "macOS blocks \(holder) from reading \(what) \(url.path). Allow it in System Settings, Privacy and Security, Full Disk Access, then run the command again")
 }
 
 struct PositionOptions: ParsableArguments {
@@ -121,7 +125,7 @@ struct Tags: ParsableCommand {
           abdy notes tags --remove draft
           abdy notes tags --rename draft --to review
         """)
-    @Argument(help: ArgumentHelp("Notes, by \(ReferenceHelp.note), or - for ids from stdin")) var ids: [String] = []
+    @Argument(help: ArgumentHelp("Notes, by \(ReferenceHelp.noteText), or - for ids from stdin")) var ids: [String] = []
     @Option(help: ArgumentHelp("Native tags to add, \(ReferenceHelp.tag), separated by slash, comma or whitespace")) var add: String?
     @Option(help: ArgumentHelp("Native tags to remove, \(ReferenceHelp.tag) or tag id, separated by slash, comma or whitespace")) var remove: String?
     @Option(help: ArgumentHelp("Tag to rename everywhere, \(ReferenceHelp.tag)")) var rename: String?
@@ -277,6 +281,7 @@ func copyAttachmentFiles(_ sources: [(id: String, source: URL)], file: String?, 
     var names = Set<String>()
     for (id, source) in sources {
         guard FileManager.default.fileExists(atPath: source.path) else { throw NotesError(description: "attachment file is not available locally") }
+        try requireReadable(source, what: "the attachment file")
         let destination: URL
         if let file { destination = URL(fileURLWithPath: file) }
         else {

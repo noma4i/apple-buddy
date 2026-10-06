@@ -103,6 +103,13 @@ final class CalendarTests: XCTestCase {
         XCTAssertEqual(try run(["calendar", "add", "x"]).code, 64, "--start is required")
     }
 
+    func testEventAlarmsAreReportedInAscendingOrder() throws {
+        _ = try run(["calendar", "mkcal", "Work"])
+        let event = id(try run(["calendar", "add", "Order", "--calendar", "Work", "--start", "2026-10-09T14:00", "--alarm", "60", "--alarm", "5", "--alarm", "15"]))
+        let object = try XCTUnwrap(try json(try run(["calendar", "show", event, "--json"]).out) as? [String: Any])
+        XCTAssertEqual(object["alarms"] as? [Int], [5, 15, 60])
+    }
+
     func testRepeatingEventsExpandAndNeedOccurrenceAndSpan() throws {
         _ = try run(["calendar", "mkcal", "Work"])
         let standup = try run(["calendar", "add", "Standup", "--calendar", "Work", "--start", "2026-10-06T09:30", "--duration", "15", "--repeat", "weekly", "--count", "4"])

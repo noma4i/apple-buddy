@@ -233,7 +233,7 @@ struct AddEvent: ParsableCommand {
         let allDay = fields.allDay || (!start.hasTime && fields.end?.hasTime != true && fields.duration == nil)
         let (begin, finish) = try fields.range(start: start.date, allDay: allDay, currentEnd: nil)
         let item = EventItem(id: "", title: title, calendarID: target.id, calendar: target.title, start: begin, end: finish, allDay: allDay, location: fields.location, notes: fields.notes, url: fields.url,
-                             alarms: fields.alarm, recurrence: fields.recurrence(), occurrence: nil, isDetached: false, status: "none", organizer: nil, attendees: [], created: nil, modified: nil)
+                             alarms: fields.alarm.sorted(), recurrence: fields.recurrence(), occurrence: nil, isDetached: false, status: "none", organizer: nil, attendees: [], created: nil, modified: nil)
         try output.writeAction("calendar add", try eventJSON(try store.saveEvents([item], span: .this)[0]), notesSync: false)
     }
 }
@@ -281,7 +281,7 @@ struct EditEvent: ParsableCommand {
         if let notes = fields.notes { item.notes = notes }
         if let url = fields.url { item.url = url }
         if clearAlarms { item.alarms = [] }
-        if !fields.alarm.isEmpty { item.alarms = fields.alarm }
+        if !fields.alarm.isEmpty { item.alarms = fields.alarm.sorted() }
         if clearRepeat { item.recurrence = nil }
         if let recurrence = fields.recurrence() { item.recurrence = recurrence }
         try output.writeAction("calendar edit", try eventJSON(try store.saveEvents([item], span: span ?? .this)[0]), notesSync: false)

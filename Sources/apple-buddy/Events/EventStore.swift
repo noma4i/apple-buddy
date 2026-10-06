@@ -194,7 +194,7 @@ final class SystemEventStore: EventStore {
         }
         return ReminderItem(id: reminder.calendarItemIdentifier, title: reminder.title ?? "", notes: reminder.notes, listID: reminder.calendar.calendarIdentifier, list: reminder.calendar.title, due: due, dueHasTime: hasTime,
                             priority: reminder.priority, completed: reminder.isCompleted, completionDate: reminder.completionDate, url: reminder.url?.absoluteString,
-                            alarms: (reminder.alarms ?? []).filter { $0.structuredLocation == nil }.map { Int(-$0.relativeOffset / 60) }, location: (reminder.alarms ?? []).compactMap(Self.locationAlarm).first,
+                            alarms: (reminder.alarms ?? []).filter { $0.structuredLocation == nil }.map { Int(-$0.relativeOffset / 60) }.sorted(), location: (reminder.alarms ?? []).compactMap(Self.locationAlarm).first,
                             recurrence: reminder.recurrenceRules?.first.map(Self.describe), flagged: details["flagged"] as? Bool ?? false, tags: details["tags"] as? [String] ?? [],
                             parentID: details["parent"] as? String, sectionID: details["sectionID"] as? String, section: details["section"] as? String, attachments: attachments,
                             created: reminder.creationDate, modified: reminder.lastModifiedDate)
@@ -411,7 +411,7 @@ final class SystemEventStore: EventStore {
 
     private func describe(_ event: EKEvent) -> EventItem {
         EventItem(id: event.calendarItemIdentifier, title: event.title ?? "", calendarID: event.calendar.calendarIdentifier, calendar: event.calendar.title, start: event.startDate, end: event.endDate, allDay: event.isAllDay,
-                  location: event.location, notes: event.notes, url: event.url?.absoluteString, alarms: (event.alarms ?? []).map { Int(-$0.relativeOffset / 60) },
+                  location: event.location, notes: event.notes, url: event.url?.absoluteString, alarms: (event.alarms ?? []).map { Int(-$0.relativeOffset / 60) }.sorted(),
                   recurrence: event.recurrenceRules?.first.map(Self.describe), occurrence: event.hasRecurrenceRules || event.isDetached ? event.occurrenceDate : nil, isDetached: event.isDetached,
                   status: Self.status(event.status), organizer: event.organizer.map { $0.name ?? $0.url.absoluteString }, attendees: (event.attendees ?? []).map(Self.attendee),
                   created: event.creationDate, modified: event.lastModifiedDate)

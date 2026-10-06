@@ -46,7 +46,7 @@ struct Remove: ParsableCommand {
         """
     )
 
-    @Argument(help: ArgumentHelp("1 or more notes, by \(ReferenceHelp.note), or - for ids from stdin")) var ids: [String]
+    @Argument(help: ArgumentHelp("1 or more notes, by \(ReferenceHelp.noteText), or - for ids from stdin")) var ids: [String]
 
     func run() throws {
         let notes = try openLocalNotes(readOnly: false).trashNotes(withIDs: try noteReferences(ids))
@@ -71,7 +71,7 @@ struct Move: ParsableCommand {
         """
     )
 
-    @Argument(help: ArgumentHelp("1 or more notes, by \(ReferenceHelp.note), or - for ids from stdin")) var ids: [String]
+    @Argument(help: ArgumentHelp("1 or more notes, by \(ReferenceHelp.noteText), or - for ids from stdin")) var ids: [String]
     @Option(help: ArgumentHelp("Target folder, by \(ReferenceHelp.folder)")) var folder: String
 
     func run() throws {

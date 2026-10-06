@@ -137,6 +137,15 @@ final class RemindersTests: XCTestCase {
         XCTAssertEqual(try run(["reminders", "ls", "--all"]).err, "1 reminders\n")
     }
 
+    func testAlarmsAreReportedInAscendingOrder() throws {
+        _ = try run(["reminders", "access"])
+        _ = try run(["reminders", "mklist", "Home"])
+        let item = try run(["reminders", "add", "Order", "--list", "Home", "--due", "2026-10-20T09:00", "--alarm", "30", "--alarm", "5", "--alarm", "60"]).out.trimmingCharacters(in: .whitespacesAndNewlines)
+        let object = try XCTUnwrap(try json(try run(["reminders", "show", item, "--json"]).out) as? [String: Any])
+        XCTAssertEqual(object["alarms"] as? [Int], [5, 30, 60])
+        XCTAssertTrue(try run(["reminders", "show", item]).out.contains("Alarms: 5 min before, 30 min before, 60 min before"))
+    }
+
     func testReadOnlyListsRefuseWritesAndValidationHasExitCode64() throws {
         _ = try run(["reminders", "access"])
         _ = try run(["reminders", "mklist", "Feed", "--source", "Subscribed Calendars"])
@@ -284,5 +293,11 @@ final class RemindersTests: XCTestCase {
         XCTAssertEqual(removed.code, 0, removed.err)
         XCTAssertEqual(try run(["reminders", "attachments", "ls", reminder]).err, "2 attachments\n")
         XCTAssertEqual(try run(["reminders", "attachments", "rm", reminder, "--attachment", "nothing-here"]).code, 1)
+        let blocked = try XCTUnwrap(attachments[1]["path"] as? String)
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: blocked)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: blocked) }
+        let denied = try run(["reminders", "attachments", "export", reminder, "--attachment", String((attachments[1]["id"] as! String).prefix(8)), "--file", folder.appendingPathComponent("denied.txt").path])
+        XCTAssertEqual(denied.code, 1)
+        XCTAssertTrue(denied.err.contains("macOS blocks this terminal application from reading the attachment file") && denied.err.contains("Full Disk Access"), denied.err)
     }
 }
