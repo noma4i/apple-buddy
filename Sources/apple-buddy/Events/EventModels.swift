@@ -38,6 +38,25 @@ struct LocationAlarm: Codable, Equatable {
     var proximity: Proximity
 }
 
+struct ReminderAttachment: Codable, Equatable {
+    enum Kind: String, Codable { case image, file, url }
+    var id: String
+    var kind: Kind
+    var uti: String?
+    var name: String?
+    var path: String?
+    var size: Int?
+    var width: Int?
+    var height: Int?
+    var url: String?
+}
+
+struct ReminderSection: Codable, Equatable {
+    var id: String
+    var title: String
+    var listID: String
+}
+
 struct ReminderItem: Codable, Equatable {
     var id: String
     var title: String
@@ -53,6 +72,12 @@ struct ReminderItem: Codable, Equatable {
     var alarms: [Int]
     var location: LocationAlarm?
     var recurrence: Recurrence?
+    var flagged = false
+    var tags: [String] = []
+    var parentID: String?
+    var sectionID: String?
+    var section: String?
+    var attachments: [ReminderAttachment] = []
     var created: Date?
     var modified: Date?
 }

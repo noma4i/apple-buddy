@@ -11,10 +11,11 @@ let package = Package(
     ],
     targets: [
         .target(name: "NotesNative", linkerSettings: [.linkedFramework("CoreData"), .linkedFramework("AppKit"), .linkedFramework("PDFKit"), .linkedFramework("Vision"), .linkedFramework("UniformTypeIdentifiers")]),
+        .target(name: "RemindersNative"),
         .executableTarget(
             name: "apple-buddy",
-            dependencies: ["NotesNative", .product(name: "ArgumentParser", package: "swift-argument-parser"), .product(name: "MCP", package: "swift-sdk")],
-            linkerSettings: [.linkedFramework("EventKit")]
+            dependencies: ["NotesNative", "RemindersNative", .product(name: "ArgumentParser", package: "swift-argument-parser"), .product(name: "MCP", package: "swift-sdk")],
+            linkerSettings: [.linkedFramework("EventKit"), .linkedFramework("ImageIO"), .linkedFramework("UniformTypeIdentifiers")]
         ),
         .testTarget(name: "AppleBuddyTests", dependencies: ["apple-buddy", "NotesNative"]),
     ]

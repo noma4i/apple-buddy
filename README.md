@@ -23,7 +23,8 @@ abdy notes search invoice --show --limit 3
 note=$(abdy notes new --folder Work --title "Project plan")
 abdy notes insert "$note" --text "Draft budget"
 abdy notes sync
-abdy reminders add "Buy milk" --list Groceries --due 2026-10-07T18:00 --alarm 30
+reminder=$(abdy reminders add "Buy milk" --list Groceries --due 2026-10-07T18:00 --alarm 30 --tag errands)
+abdy reminders attachments add "$reminder" --file photo.jpg
 abdy calendar events --from 2026-10-06 --to 2026-10-13 --long
 abdy mcp
 ```
@@ -36,7 +37,7 @@ Notes writes save locally and return at once, `abdy notes sync` sends them to iC
 | Topic | Document |
 | --- | --- |
 | Notes: commands, search, folders, tags, files, bulk changes, Bear import, backup | [docs/notes.md](docs/notes.md) |
-| Reminders and Calendar: lists, calendars, events, repeats, access | [docs/reminders-calendar.md](docs/reminders-calendar.md) |
+| Reminders and Calendar: lists, flags, tags, sections, subtasks, attachments, calendars, events, repeats, access | [docs/reminders-calendar.md](docs/reminders-calendar.md) |
 | MCP server: tools, results, agent workflow | [docs/mcp.md](docs/mcp.md) |
 | Output formats, exit codes, references, sync model | [docs/output.md](docs/output.md) |
 | Install, update, private repository access | [docs/install.md](docs/install.md) |

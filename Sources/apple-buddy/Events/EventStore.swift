@@ -2,6 +2,9 @@ import AppKit
 import CoreLocation
 import EventKit
 import Foundation
+import ImageIO
+import RemindersNative
+import UniformTypeIdentifiers
 
 protocol EventStore {
     func accessStatus(_ kind: ItemKind) -> String
@@ -15,6 +18,12 @@ protocol EventStore {
     func reminder(_ id: String) throws -> ReminderItem?
     func saveReminders(_ items: [ReminderItem]) throws -> [ReminderItem]
     func removeReminders(_ ids: [String]) throws
+    func addAttachment(_ reminderID: String, file: String?, url: String?) throws -> ReminderAttachment
+    func removeAttachment(_ reminderID: String, attachment: String) throws
+    func sections(listID: String) throws -> [ReminderSection]
+    func createSection(listID: String, title: String) throws -> ReminderSection
+    func renameSection(_ id: String, to title: String) throws -> ReminderSection
+    func removeSection(_ id: String) throws
     func events(from: Date, to: Date, calendarIDs: [String]?) throws -> [EventItem]
     func event(_ id: String, occurrence: Date?) throws -> EventItem?
     func saveEvents(_ items: [EventItem], span: EditSpan) throws -> [EventItem]
@@ -24,6 +33,27 @@ protocol EventStore {
 func openEventStore() -> EventStore {
     if let path = ProcessInfo.processInfo.environment["ABDY_EVENT_STORE_FILE"] { return MemoryEventStore(file: URL(fileURLWithPath: path)) }
     return SystemEventStore()
+}
+
+struct AttachmentFile {
+    let path: String
+    let uti: String
+    let width: Int
+    let height: Int
+
+    init(_ file: String) throws {
+        path = try readableFilePath(file)
+        let type = UTType(filenameExtension: URL(fileURLWithPath: path).pathExtension) ?? .data
+        uti = type.identifier
+        var size = (0, 0)
+        if type.conforms(to: .image), let source = CGImageSourceCreateWithURL(URL(fileURLWithPath: path) as CFURL, nil),
+           let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+           let width = properties[kCGImagePropertyPixelWidth] as? Int, let height = properties[kCGImagePropertyPixelHeight] as? Int {
+            size = (width, height)
+        }
+        width = size.0
+        height = size.1
+    }
 }
 
 func requireAccess(_ store: EventStore, _ kind: ItemKind) throws {
@@ -36,6 +66,14 @@ func requireAccess(_ store: EventStore, _ kind: ItemKind) throws {
 
 final class SystemEventStore: EventStore {
     private var store = EKEventStore()
+    private var kit: ABReminderKit?
+
+    private func reminderKit() throws -> ABReminderKit {
+        if let kit { return kit }
+        let opened = try ABReminderKit.open()
+        kit = opened
+        return opened
+    }
 
     private static func entity(_ kind: ItemKind) -> EKEntityType { kind == .reminder ? .reminder : .event }
 
@@ -141,17 +179,28 @@ final class SystemEventStore: EventStore {
         try store.removeCalendar(calendar, commit: true)
     }
 
-    private func describe(_ reminder: EKReminder) -> ReminderItem {
+    private func describe(_ reminder: EKReminder, details: [String: Any]) -> ReminderItem {
         var due: Date?
         var hasTime = false
         if let components = reminder.dueDateComponents {
             due = Calendar.current.date(from: components)
             hasTime = components.hour != nil
         }
+        let attachments = (details["attachments"] as? [[String: Any]] ?? []).compactMap { value -> ReminderAttachment? in
+            guard let id = value["id"] as? String, let kind = (value["kind"] as? String).flatMap(ReminderAttachment.Kind.init) else { return nil }
+            return ReminderAttachment(id: id, kind: kind, uti: value["uti"] as? String, name: value["name"] as? String, path: value["path"] as? String,
+                                      size: value["size"] as? Int, width: value["width"] as? Int, height: value["height"] as? Int, url: value["url"] as? String)
+        }
         return ReminderItem(id: reminder.calendarItemIdentifier, title: reminder.title ?? "", notes: reminder.notes, listID: reminder.calendar.calendarIdentifier, list: reminder.calendar.title, due: due, dueHasTime: hasTime,
                             priority: reminder.priority, completed: reminder.isCompleted, completionDate: reminder.completionDate, url: reminder.url?.absoluteString,
                             alarms: (reminder.alarms ?? []).filter { $0.structuredLocation == nil }.map { Int(-$0.relativeOffset / 60) }, location: (reminder.alarms ?? []).compactMap(Self.locationAlarm).first,
-                            recurrence: reminder.recurrenceRules?.first.map(Self.describe), created: reminder.creationDate, modified: reminder.lastModifiedDate)
+                            recurrence: reminder.recurrenceRules?.first.map(Self.describe), flagged: details["flagged"] as? Bool ?? false, tags: details["tags"] as? [String] ?? [],
+                            parentID: details["parent"] as? String, sectionID: details["sectionID"] as? String, section: details["section"] as? String, attachments: attachments,
+                            created: reminder.creationDate, modified: reminder.lastModifiedDate)
+    }
+
+    private func details(_ ids: [String]?) throws -> [String: [String: Any]] {
+        try reminderKit().details(forReminders: ids) as? [String: [String: Any]] ?? [:]
     }
 
     private static func locationAlarm(_ alarm: EKAlarm) -> LocationAlarm? {
@@ -193,11 +242,26 @@ final class SystemEventStore: EventStore {
         var found: [EKReminder] = []
         store.fetchReminders(matching: predicate) { reminders in found = reminders ?? []; semaphore.signal() }
         guard semaphore.wait(timeout: .now() + 60) == .success else { throw NotesError(description: "Reminders did not answer within 60 seconds") }
-        return found.map(describe)
+        let extras = try details(nil)
+        return found.map { describe($0, details: extras[$0.calendarItemIdentifier] ?? [:]) }
     }
 
     func reminder(_ id: String) throws -> ReminderItem? {
-        (store.calendarItem(withIdentifier: id) as? EKReminder).map(describe)
+        guard let reminder = store.calendarItem(withIdentifier: id) as? EKReminder else { return nil }
+        return describe(reminder, details: try details([id])[id] ?? [:])
+    }
+
+    private func reminderKitOptions(_ item: ReminderItem, current: [String: Any]) -> [String: Any] {
+        var options: [String: Any] = [:]
+        if item.flagged != (current["flagged"] as? Bool ?? false) { options["flagged"] = item.flagged }
+        if Set(item.tags) != Set(current["tags"] as? [String] ?? []) { options["tags"] = item.tags }
+        if item.parentID != current["parent"] as? String {
+            if let parent = item.parentID { options["parent"] = parent } else { options["clearParent"] = true }
+        }
+        if item.sectionID != current["sectionID"] as? String {
+            if let section = item.sectionID { options["section"] = section } else { options["clearSection"] = true }
+        }
+        return options
     }
 
     private func apply(_ item: ReminderItem, to reminder: EKReminder) throws {
@@ -232,21 +296,34 @@ final class SystemEventStore: EventStore {
     }
 
     func saveReminders(_ items: [ReminderItem]) throws -> [ReminderItem] {
-        var saved: [EKReminder] = []
+        var saved: [(EKReminder, ReminderItem)] = []
+        let existing = try details(items.filter { !$0.id.isEmpty }.map(\.id))
         do {
-            for item in items {
+            for var item in items {
                 let reminder: EKReminder
-                if item.id.isEmpty { reminder = EKReminder(eventStore: store) } else {
-                    guard let existing = store.calendarItem(withIdentifier: item.id) as? EKReminder else { throw NotesError(description: "Reminder not found: \(item.id)") }
-                    reminder = existing
+                if item.id.isEmpty, let parent = item.parentID {
+                    item.id = try reminderKit().createSubtask(item.title, parent: parent)
+                    store.refreshSourcesIfNecessary()
+                    guard let created = store.calendarItem(withIdentifier: item.id) as? EKReminder else { throw NotesError(description: "Reminders created subtask \(item.id) but EventKit cannot read it") }
+                    reminder = created
+                } else if item.id.isEmpty { reminder = EKReminder(eventStore: store) } else {
+                    guard let found = store.calendarItem(withIdentifier: item.id) as? EKReminder else { throw NotesError(description: "Reminder not found: \(item.id)") }
+                    reminder = found
                 }
                 try apply(item, to: reminder)
                 try store.save(reminder, commit: false)
-                saved.append(reminder)
+                saved.append((reminder, item))
             }
             try store.commit()
         } catch { store.reset(); throw error }
-        return saved.map(describe)
+        for (reminder, item) in saved {
+            var current = existing[item.id] ?? [:]
+            if item.parentID != nil && existing[item.id] == nil { current["parent"] = item.parentID }
+            let options = reminderKitOptions(item, current: current)
+            if !options.isEmpty { try reminderKit().updateReminder(reminder.calendarItemIdentifier, options: options) }
+        }
+        let fresh = try details(saved.map { $0.0.calendarItemIdentifier })
+        return saved.map { describe($0.0, details: fresh[$0.0.calendarItemIdentifier] ?? [:]) }
     }
 
     func removeReminders(_ ids: [String]) throws {
@@ -257,6 +334,42 @@ final class SystemEventStore: EventStore {
             }
             try store.commit()
         } catch { store.reset(); throw error }
+    }
+
+    private static func attachment(_ value: [String: Any]) -> ReminderAttachment {
+        ReminderAttachment(id: value["id"] as? String ?? "", kind: (value["kind"] as? String).flatMap(ReminderAttachment.Kind.init) ?? .file, uti: value["uti"] as? String, name: value["name"] as? String,
+                           path: value["path"] as? String, size: value["size"] as? Int, width: value["width"] as? Int, height: value["height"] as? Int, url: value["url"] as? String)
+    }
+
+    func addAttachment(_ reminderID: String, file: String?, url: String?) throws -> ReminderAttachment {
+        let source = try file.map(AttachmentFile.init)
+        let value = try reminderKit().addAttachment(toReminder: reminderID, file: source?.path, uti: source?.uti, width: source?.width ?? 0, height: source?.height ?? 0, url: url)
+        return Self.attachment(value as? [String: Any] ?? [:])
+    }
+
+    func removeAttachment(_ reminderID: String, attachment: String) throws {
+        try reminderKit().removeAttachment(attachment, fromReminder: reminderID)
+    }
+
+    private static func section(_ value: Any) -> ReminderSection {
+        let dictionary = value as? [String: Any] ?? [:]
+        return ReminderSection(id: dictionary["id"] as? String ?? "", title: dictionary["title"] as? String ?? "", listID: dictionary["listID"] as? String ?? "")
+    }
+
+    func sections(listID: String) throws -> [ReminderSection] {
+        try reminderKit().sections(inList: listID).map(Self.section)
+    }
+
+    func createSection(listID: String, title: String) throws -> ReminderSection {
+        Self.section(try reminderKit().createSection(title, inList: listID))
+    }
+
+    func renameSection(_ id: String, to title: String) throws -> ReminderSection {
+        Self.section(try reminderKit().renameSection(id, to: title))
+    }
+
+    func removeSection(_ id: String) throws {
+        try reminderKit().removeSection(id)
     }
 
     private static func status(_ status: EKEventStatus) -> String {

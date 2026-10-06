@@ -9,7 +9,7 @@ or enable the application in System Settings, Privacy and Security, Reminders an
 
 ```sh
 abdy reminders lists
-abdy reminders add "Buy milk" --list Groceries --due 2026-10-07T18:00 --alarm 30 --priority 1
+reminder=$(abdy reminders add "Buy milk" --list Groceries --due 2026-10-07T18:00 --alarm 30 --priority 1)
 abdy reminders ls --list Groceries --long
 abdy reminders edit "$reminder" --title "Buy oat milk" --clear-alarms
 abdy reminders done "$reminder"

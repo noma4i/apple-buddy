@@ -6,6 +6,7 @@ final class MemoryEventStore: EventStore {
         var sources: [EventSource] = [EventSource(id: "source-local", title: "On My Mac", type: "local"), EventSource(id: "source-sub", title: "Subscribed Calendars", type: "subscribed")]
         var calendars: [EventCalendar] = []
         var reminders: [ReminderItem] = []
+        var sections: [ReminderSection] = []
         var events: [EventItem] = []
     }
 
@@ -76,6 +77,12 @@ final class MemoryEventStore: EventStore {
             guard !list.readOnly else { throw NotesError(description: "List \(list.title) is read-only") }
             item.list = list.title
             item.modified = Date()
+            if let parent = item.parentID, !next.reminders.contains(where: { $0.id == parent }) { throw NotesError(description: "Reminder not found in Reminders: \(parent)") }
+            if let sectionID = item.sectionID {
+                guard let section = next.sections.first(where: { $0.id == sectionID }) else { throw NotesError(description: "Section not found: \(sectionID)") }
+                item.section = section.listID == item.listID ? section.title : nil
+                if item.section == nil { item.sectionID = nil }
+            } else { item.section = nil }
             if item.id.isEmpty {
                 item.id = UUID().uuidString
                 item.created = item.modified
@@ -95,9 +102,76 @@ final class MemoryEventStore: EventStore {
         var next = state
         for id in ids {
             guard next.reminders.contains(where: { $0.id == id }) else { throw NotesError(description: "Reminder not found: \(id)") }
-            next.reminders.removeAll { $0.id == id }
+            next.reminders.removeAll { $0.id == id || $0.parentID == id }
         }
         state = next
+        try persist()
+    }
+
+    private func reminderIndex(_ id: String) throws -> Int {
+        guard let index = state.reminders.firstIndex(where: { $0.id == id }) else { throw NotesError(description: "Reminder not found in Reminders: \(id)") }
+        return index
+    }
+
+    func addAttachment(_ reminderID: String, file: String?, url: String?) throws -> ReminderAttachment {
+        let index = try reminderIndex(reminderID)
+        var attachment = ReminderAttachment(id: UUID().uuidString, kind: .url, url: url)
+        if let file {
+            let source = try AttachmentFile(file)
+            let folder = self.file.deletingPathExtension().appendingPathExtension("files")
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            let copy = folder.appendingPathComponent(attachment.id).appendingPathExtension(URL(fileURLWithPath: source.path).pathExtension)
+            try FileManager.default.copyItem(at: URL(fileURLWithPath: source.path), to: copy)
+            let size = try FileManager.default.attributesOfItem(atPath: copy.path)[.size] as? Int
+            attachment = ReminderAttachment(id: attachment.id, kind: source.width > 0 ? .image : .file, uti: source.uti, name: copy.lastPathComponent, path: copy.path, size: size,
+                                            width: source.width > 0 ? source.width : nil, height: source.width > 0 ? source.height : nil, url: nil)
+        } else {
+            guard let url, URL(string: url)?.scheme != nil else { throw NotesError(description: "Not a valid URL: \(url ?? "")") }
+        }
+        state.reminders[index].attachments.append(attachment)
+        try persist()
+        return attachment
+    }
+
+    func removeAttachment(_ reminderID: String, attachment: String) throws {
+        let index = try reminderIndex(reminderID)
+        guard state.reminders[index].attachments.contains(where: { $0.id == attachment }) else { throw NotesError(description: "Attachment not found in this reminder: \(attachment)") }
+        state.reminders[index].attachments.removeAll { $0.id == attachment }
+        try persist()
+    }
+
+    func sections(listID: String) throws -> [ReminderSection] {
+        guard state.calendars.contains(where: { $0.id == listID && $0.kind == .reminder }) else { throw NotesError(description: "List not found in Reminders: \(listID)") }
+        return state.sections.filter { $0.listID == listID }
+    }
+
+    func createSection(listID: String, title: String) throws -> ReminderSection {
+        _ = try sections(listID: listID)
+        let section = ReminderSection(id: UUID().uuidString, title: title, listID: listID)
+        state.sections.append(section)
+        try persist()
+        return section
+    }
+
+    private func sectionIndex(_ id: String) throws -> Int {
+        guard let index = state.sections.firstIndex(where: { $0.id == id }) else { throw NotesError(description: "Section not found: \(id)") }
+        return index
+    }
+
+    func renameSection(_ id: String, to title: String) throws -> ReminderSection {
+        let index = try sectionIndex(id)
+        state.sections[index].title = title
+        for reminder in state.reminders.indices where state.reminders[reminder].sectionID == id { state.reminders[reminder].section = title }
+        try persist()
+        return state.sections[index]
+    }
+
+    func removeSection(_ id: String) throws {
+        state.sections.remove(at: try sectionIndex(id))
+        for reminder in state.reminders.indices where state.reminders[reminder].sectionID == id {
+            state.reminders[reminder].sectionID = nil
+            state.reminders[reminder].section = nil
+        }
         try persist()
     }
 

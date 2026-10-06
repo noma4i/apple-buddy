@@ -6,7 +6,9 @@ struct Reminders: ParsableCommand {
     static let configuration = CommandConfiguration(
         abstract: "Create, edit and organize Apple Reminders",
         subcommands: [RemindersAccess.self, ReminderLists.self, MakeList.self, RenameList.self, RemoveList.self, ListReminders.self, ShowReminder.self, SearchReminders.self,
-                      AddReminder.self, EditReminder.self, CompleteReminders.self, ReopenReminders.self, RemoveReminders.self, MoveReminders.self]
+                      AddReminder.self, EditReminder.self, CompleteReminders.self, ReopenReminders.self, RemoveReminders.self, MoveReminders.self,
+                      FlagReminders.self, UnflagReminders.self, Subtasks.self, ReminderTags.self, ReminderAttachments.self,
+                      ReminderSections.self, MakeSection.self, RenameSection.self, RemoveSection.self]
     )
 }
 
@@ -18,17 +20,23 @@ func reminderRows(_ items: [ReminderItem], lists: [EventCalendar]) -> String {
     }.joined(separator: "\n")
 }
 
-func reminderText(_ item: ReminderItem, lists: [EventCalendar]) -> String {
+func reminderText(_ item: ReminderItem, lists: [EventCalendar], subtasks: [ReminderItem] = []) -> String {
     var lines = [item.id, "Title: \(item.title)", "List: \(lists.first { $0.id == item.listID }?.title ?? item.listID)"]
+    if let section = item.section { lines.append("Section: \(section)") }
+    if let parent = item.parentID { lines.append("Parent: \(parent)") }
     if let due = item.due { lines.append("Due: " + DateText.stamp(due, hasTime: item.dueHasTime)) }
     lines.append("Priority: \(item.priority)")
+    if item.flagged { lines.append("Flagged: true") }
     lines.append("Completed: \(item.completed)" + (item.completionDate.map { " at " + DateText.stamp($0) } ?? ""))
+    if !item.tags.isEmpty { lines.append("Tags: " + item.tags.map { "#" + $0 }.joined(separator: " ")) }
     if let url = item.url { lines.append("URL: \(url)") }
     if !item.alarms.isEmpty { lines.append("Alarms: " + item.alarms.map { "\($0) min before" }.joined(separator: ", ")) }
     if let location = item.location {
         lines.append("Location: \(location.proximity == .arrive ? "arriving at" : "leaving") \(location.title) (\(location.latitude), \(location.longitude), \(Int(location.radius)) m)")
     }
     if let recurrence = item.recurrence { lines.append("Repeats: " + recurrenceText(recurrence)) }
+    for attachment in item.attachments { lines.append("Attachment: \(attachment.id) \(attachment.kind.rawValue) \(attachment.url ?? attachment.name ?? "")") }
+    for subtask in subtasks { lines.append("Subtask: \(subtask.id) \(subtask.completed ? "[x]" : "[ ]") \(subtask.title)") }
     if let notes = item.notes, !notes.isEmpty { lines.append(""); lines.append(notes) }
     return lines.joined(separator: "\n")
 }
@@ -187,26 +195,35 @@ struct ListReminders: ParsableCommand {
         Prints open reminders of every list as UUIDs, 1 per line, sorted by due date then title. Items without a due date come last.
         --completed lists only completed reminders, --all lists both.
         --long prints uuid, due date, list and title, tab separated. With --json prints the full reminder objects.
+        --flagged, --tag and --section narrow the list, --section needs --list. Subtasks are listed with their parent in the parent field.
 
         EXAMPLES
           abdy reminders ls --list Groceries --long
           abdy reminders ls --due-before 2026-10-08 --json
+          abdy reminders ls --tag errands --flagged
         """)
     @Option(help: ArgumentHelp("Only this list, by \(EventHelp.list)")) var list: String?
     @Flag(help: "Only completed reminders") var completed = false
     @Flag(help: "Open and completed reminders") var all = false
+    @Flag(help: "Only flagged reminders") var flagged = false
+    @Option(help: "Only reminders with this tag") var tag: String?
+    @Option(help: "Only reminders in this section of --list, by title, UUID or prefix") var section: String?
     @Option(help: ArgumentHelp("Only reminders due before this date, \(DateArgument.help)")) var dueBefore: DateArgument?
     @Option(help: ArgumentHelp("Only reminders due after this date, \(DateArgument.help)")) var dueAfter: DateArgument?
     @OptionGroup var paging: ListPaging
 
     func run() throws {
         guard !(completed && all) else { throw ValidationError("choose either --completed or --all") }
+        guard section == nil || list != nil else { throw ValidationError("--section needs --list") }
         let store = openEventStore()
         try requireAccess(store, .reminder)
         let lists = try store.calendars(.reminder)
         let listIDs = try list.map { [try resolveCalendar(store, kind: .reminder, $0).id] }
         var items = try store.reminders(listIDs: listIDs)
         if !all { items = items.filter { $0.completed == completed } }
+        if flagged { items = items.filter(\.flagged) }
+        if let tag { let name = tag.drop { $0 == "#" }; items = items.filter { $0.tags.contains { $0.caseInsensitiveCompare(name) == .orderedSame } } }
+        if let section { let found = try resolveSection(store, listID: listIDs![0], section); items = items.filter { $0.sectionID == found.id } }
         if let dueBefore { items = items.filter { $0.due.map { $0 < dueBefore.date } ?? false } }
         if let dueAfter { items = items.filter { $0.due.map { $0 > dueAfter.date } ?? false } }
         items.sort { a, b in
@@ -225,14 +242,17 @@ struct ListReminders: ParsableCommand {
 
 struct ShowReminder: ParsableCommand {
     @OptionGroup var output: OutputOptions
-    static let configuration = CommandConfiguration(commandName: "show", abstract: "Print a reminder", discussion: "Prints title, list, due date, priority, completion, URL, alarms, repeat rule and notes. Example: abdy reminders show <id>")
+    static let configuration = CommandConfiguration(commandName: "show", abstract: "Print a reminder", discussion: "Prints title, list, section, due date, priority, flag, completion, tags, URL, alarms, repeat rule, attachments, subtasks and notes. Example: abdy reminders show <id>")
     @Argument(help: ArgumentHelp(EventHelp.reminder)) var id: String
 
     func run() throws {
         let store = openEventStore()
         try requireAccess(store, .reminder)
         let item = try resolveReminders(store, [id])[0]
-        try output.write(try eventJSON(item), text: reminderText(item, lists: try store.calendars(.reminder)))
+        let subtasks = try store.reminders(listIDs: [item.listID]).filter { $0.parentID == item.id }
+        var data = try eventJSON(item) as? [String: Any] ?? [:]
+        if !subtasks.isEmpty { data["subtasks"] = try eventJSON(subtasks) }
+        try output.write(data, text: reminderText(item, lists: try store.calendars(.reminder), subtasks: subtasks))
     }
 }
 
@@ -276,6 +296,9 @@ struct ReminderFields: ParsableArguments {
     @Option(help: "Repeat every N periods") var interval: Int = 1
     @Option(help: ArgumentHelp("Last repeat date, \(DateArgument.help)")) var until: DateArgument?
     @Option(help: "Number of repeats") var count: Int?
+    @Flag(inversion: .prefixedNo, help: "Flag the reminder, --no-flag removes the flag") var flag: Bool?
+    @Option(help: "Tags separated by comma or whitespace, replaces the tags of the reminder") var tag: String?
+    @Option(help: "Section of the list, by title, UUID or prefix from reminders sections") var section: String?
 
     func validate() throws {
         if let priority, !(0...9).contains(priority) { throw ValidationError("--priority must be between 0 and 9") }
@@ -302,20 +325,25 @@ struct AddReminder: ParsableCommand {
         """)
     @Argument(help: "Reminder title") var title: String
     @Option(help: ArgumentHelp("List, by \(EventHelp.list)")) var list: String?
+    @Option(help: ArgumentHelp("Create a subtask of this reminder, by \(EventHelp.reminder). The subtask lives in the parent's list")) var parent: String?
     @OptionGroup var fields: ReminderFields
 
     func run() throws {
+        guard !(parent != nil && (list != nil || fields.section != nil)) else { throw ValidationError("--parent takes the list of the parent, drop --list and --section") }
         let store = openEventStore()
         try requireAccess(store, .reminder)
         let target: EventCalendar
-        if let list { target = try resolveCalendar(store, kind: .reminder, list) } else {
+        let parentItem = try parent.map { try resolveReminders(store, [$0])[0] }
+        if let parentItem { target = try resolveCalendar(store, kind: .reminder, parentItem.listID) }
+        else if let list { target = try resolveCalendar(store, kind: .reminder, list) } else {
             guard let fallback = try store.calendars(.reminder).first(where: \.isDefault) else { throw NotesError(description: "No default reminder list, pass --list") }
             target = fallback
         }
         guard !target.readOnly else { throw NotesError(description: "List \(target.title) is read-only and cannot hold new reminders") }
         let item = ReminderItem(id: "", title: title, notes: fields.notes, listID: target.id, list: target.title, due: fields.due?.date, dueHasTime: fields.due?.hasTime ?? false, priority: fields.priority ?? 0,
                                 completed: false, completionDate: nil, url: fields.url, alarms: fields.alarm, location: try locationAlarm(arrive: fields.arrive, leave: fields.leave, radius: fields.radius),
-                                recurrence: fields.recurrence(), created: nil, modified: nil)
+                                recurrence: fields.recurrence(), flagged: fields.flag ?? false, tags: fields.tag.map(tagNames) ?? [], parentID: parentItem?.id,
+                                sectionID: try fields.section.map { try resolveSection(store, listID: target.id, $0).id }, created: nil, modified: nil)
         let saved = try store.saveReminders([item])[0]
         try output.writeAction("reminders add", try eventJSON(saved), notesSync: false)
     }
@@ -325,23 +353,44 @@ struct EditReminder: ParsableCommand {
     @OptionGroup var output: OutputOptions
     static let configuration = CommandConfiguration(commandName: "edit", abstract: "Change a reminder", discussion: """
         Changes only the given fields. --clear-due removes the due date and repeat rule, --clear-alarms removes time alarms, --clear-location the location alarm.
+        --parent makes the reminder a subtask, --clear-parent makes it a top-level reminder again. --clear-section takes it out of its section, --clear-tags removes every tag.
 
-        EXAMPLE
+        EXAMPLES
           abdy reminders edit <id> --title "Buy oat milk" --due 2026-10-08T09:00
+          abdy reminders edit <id> --flag --tag errands --section Produce
         """)
     @Argument(help: ArgumentHelp(EventHelp.reminder)) var id: String
     @Option(help: "New title") var title: String?
+    @Option(help: ArgumentHelp("Make this reminder a subtask of another one in the same list, by \(EventHelp.reminder)")) var parent: String?
     @OptionGroup var fields: ReminderFields
     @Flag(help: "Remove the due date and repeat rule") var clearDue = false
     @Flag(help: "Remove every time alarm") var clearAlarms = false
     @Flag(help: "Remove the location alarm") var clearLocation = false
+    @Flag(help: "Make a subtask a top-level reminder") var clearParent = false
+    @Flag(help: "Take the reminder out of its section") var clearSection = false
+    @Flag(help: "Remove every tag") var clearTags = false
 
     func run() throws {
         guard !(clearDue && fields.due != nil) else { throw ValidationError("choose either --due or --clear-due") }
+        guard !(clearParent && parent != nil) else { throw ValidationError("choose either --parent or --clear-parent") }
+        guard !(clearSection && fields.section != nil) else { throw ValidationError("choose either --section or --clear-section") }
+        guard !(clearTags && fields.tag != nil) else { throw ValidationError("choose either --tag or --clear-tags") }
         let store = openEventStore()
         try requireAccess(store, .reminder)
         var item = try resolveReminders(store, [id])[0]
         if let title { item.title = title }
+        if let flag = fields.flag { item.flagged = flag }
+        if let tag = fields.tag { item.tags = tagNames(tag) }
+        if clearTags { item.tags = [] }
+        if let parent {
+            let parentItem = try resolveReminders(store, [parent])[0]
+            guard parentItem.listID == item.listID else { throw NotesError(description: "Parent \(parentItem.id) is in list \(parentItem.list), move the reminder there first") }
+            guard parentItem.id != item.id else { throw NotesError(description: "A reminder cannot be its own parent") }
+            item.parentID = parentItem.id
+        }
+        if clearParent { item.parentID = nil }
+        if let section = fields.section { item.sectionID = try resolveSection(store, listID: item.listID, section).id }
+        if clearSection { item.sectionID = nil }
         if let notes = fields.notes { item.notes = notes }
         if let due = fields.due { item.due = due.date; item.dueHasTime = due.hasTime }
         if clearDue { item.due = nil; item.dueHasTime = false; item.recurrence = nil }
@@ -388,16 +437,34 @@ struct ReopenReminders: ParsableCommand {
 
 struct MoveReminders: ParsableCommand {
     @OptionGroup var output: OutputOptions
-    static let configuration = CommandConfiguration(commandName: "mv", abstract: "Move reminders to another list", discussion: "Takes 1 or more ids, or - for ids from stdin. Saves once. Example: abdy reminders mv <id> --list Shopping")
+    static let configuration = CommandConfiguration(commandName: "mv", abstract: "Move reminders to another list or section", discussion: """
+        Takes 1 or more ids, or - for ids from stdin. Saves once. Moving to another list drops the section and the parent.
+        --section without --list moves within the current list of each reminder.
+
+        EXAMPLES
+          abdy reminders mv <id> --list Shopping
+          abdy reminders mv <id> <id> --list Shopping --section Produce
+        """)
     @Argument(help: ArgumentHelp("1 or more reminders, by \(EventHelp.reminder), or - for ids from stdin")) var ids: [String]
-    @Option(help: ArgumentHelp("Target list, by \(EventHelp.list)")) var list: String
+    @Option(help: ArgumentHelp("Target list, by \(EventHelp.list)")) var list: String?
+    @Option(help: "Target section, by title, UUID or prefix from reminders sections") var section: String?
 
     func run() throws {
+        guard list != nil || section != nil else { throw ValidationError("pass --list, --section or both") }
         let store = openEventStore()
         try requireAccess(store, .reminder)
-        let target = try resolveCalendar(store, kind: .reminder, list)
-        guard !target.readOnly else { throw NotesError(description: "List \(target.title) is read-only and cannot be the target") }
-        try updateReminders(output, action: "reminders mv", ids: ids, summary: "to \(target.title)") { $0.listID = target.id }
+        let target = try list.map { try resolveCalendar(store, kind: .reminder, $0) }
+        if let target, target.readOnly { throw NotesError(description: "List \(target.title) is read-only and cannot be the target") }
+        var sections: [String: String] = [:]
+        if let section {
+            let items = try resolveReminders(store, try noteReferences(ids))
+            for listID in Set(target.map { [$0.id] } ?? items.map(\.listID)) { sections[listID] = try resolveSection(store, listID: listID, section).id }
+        }
+        let summary = [target.map { "to \($0.title)" }, section.map { "into section \($0)" }].compactMap { $0 }.joined(separator: " ")
+        try updateReminders(output, action: "reminders mv", ids: ids, summary: summary) { item in
+            if let target, item.listID != target.id { item.listID = target.id; item.parentID = nil; item.sectionID = nil }
+            if section != nil { item.sectionID = sections[item.listID] }
+        }
     }
 }
 

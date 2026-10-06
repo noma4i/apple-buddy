@@ -251,43 +251,49 @@ struct Attachments: ParsableCommand {
         try validateExportDestination()
         let selected = items.filter { attachment == nil ? $0["kind"] as? String != "table" : $0["id"] as? String == attachment }
         guard attachment == nil || selected.count == 1 else { throw NotesError(description: "attachment not found in this note") }
-        var copies: [(URL, URL, String)] = []
-        var names = Set<String>()
-        for item in selected {
+        let sources = try selected.map { item -> (id: String, source: URL) in
             guard item["kind"] as? String != "table" else { throw NotesError(description: "native tables are not exported, read them with abdy notes table ls") }
             guard let id = item["id"] as? String, let path = item["path"] as? String, item["available"] as? Bool == true else {
                 throw NotesError(description: "attachment file is not available locally")
             }
-            let source = URL(fileURLWithPath: path)
-            guard FileManager.default.fileExists(atPath: source.path) else { throw NotesError(description: "attachment file is not available locally") }
-            let destination: URL
-            if let file { destination = URL(fileURLWithPath: file) }
-            else {
-                let folder = URL(fileURLWithPath: directory!)
-                var name = source.lastPathComponent
-                var number = 2
-                while !names.insert(name.lowercased()).inserted {
-                    name = source.deletingPathExtension().lastPathComponent + " (\(number))" + (source.pathExtension.isEmpty ? "" : "." + source.pathExtension)
-                    number += 1
-                }
-                destination = folder.appendingPathComponent(name)
-            }
-            guard !FileManager.default.fileExists(atPath: destination.path) else {
-                throw NotesError(description: "destination already exists: \(destination.path)")
-            }
-            copies.append((source, destination, id))
+            return (id, URL(fileURLWithPath: path))
         }
-        guard !copies.isEmpty else { throw NotesError(description: "note has no files to export") }
-        if let directory {
-            try FileManager.default.createDirectory(at: URL(fileURLWithPath: directory), withIntermediateDirectories: true)
-        }
-        var exported: [[String: String]] = []
-        for (source, destination, id) in copies {
-            try FileManager.default.copyItem(at: source, to: destination)
-            exported.append(["attachment": id, "path": destination.path])
-        }
-        return exported
+        guard !sources.isEmpty else { throw NotesError(description: "note has no files to export") }
+        return try copyAttachmentFiles(sources, file: file, directory: directory)
     }
+}
+
+func copyAttachmentFiles(_ sources: [(id: String, source: URL)], file: String?, directory: String?) throws -> [[String: String]] {
+    var copies: [(URL, URL, String)] = []
+    var names = Set<String>()
+    for (id, source) in sources {
+        guard FileManager.default.fileExists(atPath: source.path) else { throw NotesError(description: "attachment file is not available locally") }
+        let destination: URL
+        if let file { destination = URL(fileURLWithPath: file) }
+        else {
+            let folder = URL(fileURLWithPath: directory!)
+            var name = source.lastPathComponent
+            var number = 2
+            while !names.insert(name.lowercased()).inserted {
+                name = source.deletingPathExtension().lastPathComponent + " (\(number))" + (source.pathExtension.isEmpty ? "" : "." + source.pathExtension)
+                number += 1
+            }
+            destination = folder.appendingPathComponent(name)
+        }
+        guard !FileManager.default.fileExists(atPath: destination.path) else {
+            throw NotesError(description: "destination already exists: \(destination.path)")
+        }
+        copies.append((source, destination, id))
+    }
+    if let directory {
+        try FileManager.default.createDirectory(at: URL(fileURLWithPath: directory), withIntermediateDirectories: true)
+    }
+    var exported: [[String: String]] = []
+    for (source, destination, id) in copies {
+        try FileManager.default.copyItem(at: source, to: destination)
+        exported.append(["attachment": id, "path": destination.path])
+    }
+    return exported
 }
 
 struct Links: ParsableCommand {

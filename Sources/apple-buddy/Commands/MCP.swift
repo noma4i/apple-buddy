@@ -22,7 +22,7 @@ struct MCPCommand: ParsableCommand {
                             Results: structuredContent holds the same JSON as the CLI with --json, arrays come under data. isError true carries the error text, which names the object, its state and the action.
                             Ids: every id, name, path and URL in a result is accepted as input. UUID prefixes need at least 8 characters. Notes accept a UUID or an applenotes URL. Folders, lists and calendars accept a name, a path such as Work/Project for folders, or a UUID. Ambiguous names list the candidates. Tags are written with or without #.
                             Notes: notes_search and notes_ls find notes, show true returns their text in 1 call, chars caps each text, limit and offset page. A folder filter includes subfolders unless no-recursive is set. Writes save locally and return at once: call notes_sync once after the last write to send everything to iCloud, pin and unpin sync on their own. Protected and shared notes are read only. notes_mv, notes_rm and notes_tags take arrays of ids and save once. notes_open is the only tool that displays Notes. notes_backup and notes_restore work on local files, restore never touches live Notes.
-                            Reminders and Calendar: writes are saved by macOS at once, no sync tool exists. Access is granted per host application: when a tool reports missing access, call reminders_access or calendar_access once. Dates are ISO 8601, 2026-10-07T09:00 local, 2026-10-07T09:00:00+11:00 with a zone, 2026-10-07 for a whole day. alarm is minutes before the due date or start. Repeating events: calendar_events returns 1 item per occurrence with its occurrence date, calendar_edit and calendar_rm on a repeating event need occurrence and span this or future, a future edit returns a new event id. Read-only calendars and lists (readOnly true) refuse writes. rm deletes reminders and events for good.
+                            Reminders and Calendar: writes are saved by macOS at once, no sync tool exists. Access is granted per host application: when a tool reports missing access, call reminders_access or calendar_access once. Dates are ISO 8601, 2026-10-07T09:00 local, 2026-10-07T09:00:00+11:00 with a zone, 2026-10-07 for a whole day. alarm is minutes before the due date or start. Repeating events: calendar_events returns 1 item per occurrence with its occurrence date, calendar_edit and calendar_rm on a repeating event need occurrence and span this or future, a future edit returns a new event id. Read-only calendars and lists (readOnly true) refuse writes. rm deletes reminders and events for good. Reminders also have flags (reminders_flag, reminders_unflag, ls flagged), tags (reminders_tags, add with tag), sections of a list (reminders_sections, reminders_mksection, add or mv with section), subtasks (reminders_add with parent, reminders_subtasks) and attachments (reminders_attachments with action ls, add, export or rm: images, files and links). reminders_show returns all of these.
                             """,
                             capabilities: .init(tools: .init()))
         let completed = DispatchSemaphore(value: 0)
@@ -79,10 +79,32 @@ struct MCPToolCommand {
     let arguments: [ArgumentInfoV0]
     let types: [String: String]
 
+    struct ActionCommand {
+        let actions: [String]
+        let options: [String: Set<String>]
+        let required: [String: Set<String>]
+
+        init<A: RawRepresentable>(_ actions: [A], options: [String: Set<A>], required: [A: Set<String>]) where A.RawValue == String {
+            self.actions = actions.map(\.rawValue)
+            self.options = options.mapValues { Set($0.map(\.rawValue)) }
+            self.required = Dictionary(uniqueKeysWithValues: required.map { ($0.key.rawValue, $0.value) })
+        }
+    }
+
+    static let actionCommands: [String: ActionCommand] = [
+        "notes attachments": .init(Attachments.Action.allCases, options: Attachments.optionsForActions, required: Attachments.requiredOptionsForActions),
+        "notes links": .init(Links.Action.allCases, options: Links.optionsForActions, required: Links.requiredOptionsForActions),
+        "reminders attachments": .init(ReminderAttachments.Action.allCases, options: ReminderAttachments.optionsForActions, required: ReminderAttachments.requiredOptionsForActions),
+    ]
+
+    private static func actionCommand(_ command: [String]) -> (ActionCommand, String)? {
+        guard let action = command.last, let found = actionCommands[command.dropLast().joined(separator: " ")] else { return nil }
+        return (found, action)
+    }
+
     private static func requiredOptions(for command: [String]) -> Set<String> {
-        if command.dropLast().last == "attachments", let action = command.last.flatMap(Attachments.Action.init(rawValue:)) { return Attachments.requiredOptionsForActions[action] ?? [] }
-        if command.dropLast().last == "links", let action = command.last.flatMap(Links.Action.init(rawValue:)) { return Links.requiredOptionsForActions[action] ?? [] }
-        return []
+        guard let (found, action) = actionCommand(command) else { return [] }
+        return found.required[action] ?? []
     }
 
     static func all() throws -> [MCPToolCommand] {
@@ -91,8 +113,7 @@ struct MCPToolCommand {
             let command = prefix + [info.commandName]
             if ["mcp", "help"].contains(info.commandName) { return [] }
             if let children = info.subcommands, !children.isEmpty { return children.flatMap { visit($0, prefix: command) } }
-            if info.commandName == "attachments" { return Attachments.Action.allCases.map { make(info, command: command + [$0.rawValue]) } }
-            if info.commandName == "links" { return Links.Action.allCases.map { make(info, command: command + [$0.rawValue]) } }
+            if let found = actionCommands[command.joined(separator: " ")] { return found.actions.map { make(info, command: command + [$0]) } }
             return [make(info, command: command)]
         }
         var commands = (info.command.subcommands ?? []).flatMap { visit($0, prefix: []) }
@@ -106,8 +127,7 @@ struct MCPToolCommand {
     private static func make(_ info: CommandInfoV0, command: [String]) -> MCPToolCommand {
         let arguments = (info.arguments ?? []).filter { argument in
             guard argument.shouldDisplay, let name = argument.valueName, !["json", "help", "version", "action"].contains(name) else { return false }
-            if command.dropLast().last == "attachments", let action = command.last.flatMap(Attachments.Action.init(rawValue:)), let actions = Attachments.optionsForActions[name] { return actions.contains(action) }
-            if command.dropLast().last == "links", let action = command.last.flatMap(Links.Action.init(rawValue:)), let actions = Links.optionsForActions[name] { return actions.contains(action) }
+            if let (found, action) = actionCommand(command), let actions = found.options[name] { return actions.contains(action) }
             return true
         }
         var properties: [String: Value] = [:]
@@ -129,8 +149,8 @@ struct MCPToolCommand {
             types["stdin"] = "string"
         }
         let name = command.joined(separator: "_").replacingOccurrences(of: "-", with: "_")
-        let readOnly = ["version", "notes_folders", "notes_ls", "notes_stats", "notes_show", "notes_search", "notes_inspect", "notes_dups", "notes_table_ls", "notes_attachments_ls", "notes_links_ls", "reminders_lists", "reminders_ls", "reminders_show", "reminders_search", "calendar_calendars", "calendar_events", "calendar_show"].contains(name)
-        let additive = ["notes_new", "notes_mkfolder", "notes_insert", "notes_attach", "notes_attachments_add", "notes_links_add", "notes_pin", "notes_unpin", "notes_open", "notes_backup", "notes_restore", "notes_snapshot_db", "notes_attachments_export", "reminders_access", "reminders_mklist", "reminders_add", "calendar_access", "calendar_mkcal", "calendar_add"].contains(name)
+        let readOnly = ["version", "notes_folders", "notes_ls", "notes_stats", "notes_show", "notes_search", "notes_inspect", "notes_dups", "notes_table_ls", "notes_attachments_ls", "notes_links_ls", "reminders_lists", "reminders_ls", "reminders_show", "reminders_search", "reminders_subtasks", "reminders_sections", "reminders_attachments_ls", "calendar_calendars", "calendar_events", "calendar_show"].contains(name)
+        let additive = ["notes_new", "notes_mkfolder", "notes_insert", "notes_attach", "notes_attachments_add", "notes_links_add", "notes_pin", "notes_unpin", "notes_open", "notes_backup", "notes_restore", "notes_snapshot_db", "notes_attachments_export", "reminders_access", "reminders_mklist", "reminders_add", "reminders_mksection", "reminders_attachments_add", "reminders_attachments_export", "reminders_flag", "calendar_access", "calendar_mkcal", "calendar_add"].contains(name)
         let action = ["attachments", "links"].contains(command.dropLast().last ?? "") ? command.last : nil
         let discussion = info.discussion.map { text in
             text.components(separatedBy: "\n").filter { line in
@@ -186,6 +206,7 @@ struct MCPToolCommand {
         if input == nil && ["html", "csv"].contains(where: { values[$0]?.stringValue == "-" }) { throw ValidationError("Provide stdin content when html or csv is -") }
         let parsed = try AppleBuddy.parseAsRoot(options)
         if let export = parsed as? Attachments, export.action == .export { try export.validateExportDestination() }
+        if let command = parsed as? ReminderAttachments { try command.validate() }
         return (options, input)
     }
 }
