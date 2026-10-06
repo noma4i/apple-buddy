@@ -30,15 +30,15 @@ jobs:
         run: swift test --filter HelpTests
       - name: Check release help
         run: |
-          .build/release/nb help
-          .build/release/nb search help
-          test "$(.build/release/nb version)" = "$(.build/release/nb --version)"
+          .build/release/abdy help
+          .build/release/abdy notes search help
+          test "$(.build/release/abdy version)" = "$(.build/release/abdy --version)"
       - name: Update formula
         env:
           SOURCE_SHA: ${{ github.sha }}
         run: |
           /usr/bin/ruby Scripts/update-homebrew.rb "$SOURCE_SHA"
-          /usr/bin/ruby -c Formula/nb.rb
+          /usr/bin/ruby -c Formula/abdy.rb
       - name: Publish formula to master
         env:
           SOURCE_SHA: ${{ github.sha }}
@@ -48,11 +48,11 @@ jobs:
             echo "A newer push exists. Leave the formula update to that workflow."
             exit 0
           fi
-          if git diff --quiet -- Formula/nb.rb; then
+          if git diff --quiet -- Formula/abdy.rb; then
             exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add Formula/nb.rb
+          git add Formula/abdy.rb
           git commit -m "Update Homebrew formula"
           git push origin HEAD:master

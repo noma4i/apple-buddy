@@ -53,7 +53,7 @@ NSArray<NSDictionary *> *NBIndexDocuments(NSArray<NSURL *> *files, NSURL *direct
                 NSString *text = nil;
                 @try { text = NBReadDocumentText(task[@"file"], &error); }
                 @catch (NSException *exception) {
-                    error = [NSError errorWithDomain:@"notes-buddy" code:1 userInfo:@{NSLocalizedDescriptionKey:exception.reason ?: @"Could not extract document text"}];
+                    error = [NSError errorWithDomain:@"apple-buddy" code:1 userInfo:@{NSLocalizedDescriptionKey:exception.reason ?: @"Could not extract document text"}];
                 }
                 NSMutableDictionary *entry = [@{@"revision":task[@"revision"], @"cached":@NO} mutableCopy];
                 if (![task[@"revision"] isEqual:NBFileRevision(task[@"file"])]) {

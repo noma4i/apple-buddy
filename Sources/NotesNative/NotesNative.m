@@ -81,7 +81,7 @@ NSWorkspaceOpenConfiguration *NBNotesBackgroundConfiguration(NSError **error) {
     CFStringRef *background = dlsym(RTLD_DEFAULT, "_kLSOpenOptionBackgroundLaunchKey");
     CFStringRef *withoutRestore = dlsym(RTLD_DEFAULT, "_kLSOpenOptionLaunchWithoutRestoringStateKey");
     if (!background || !withoutRestore || ![configuration respondsToSelector:@selector(_setAdditionalLSOpenOptions:)]) {
-        if (error) *error = [NSError errorWithDomain:@"notes-buddy" code:1 userInfo:@{NSLocalizedDescriptionKey:@"Background Notes launch is unavailable on this macOS version"}];
+        if (error) *error = [NSError errorWithDomain:@"apple-buddy" code:1 userInfo:@{NSLocalizedDescriptionKey:@"Background Notes launch is unavailable on this macOS version"}];
         return nil;
     }
     configuration.activates = NO;
@@ -94,7 +94,7 @@ NSWorkspaceOpenConfiguration *NBNotesBackgroundConfiguration(NSError **error) {
 static NSString *NBRecognizeImage(NSImage *image, NSError **error) {
     CGImageRef pixels = [image CGImageForProposedRect:NULL context:nil hints:nil];
     if (!pixels) {
-        if (error) *error = [NSError errorWithDomain:@"notes-buddy" code:1 userInfo:@{NSLocalizedDescriptionKey:@"Cannot decode document image"}];
+        if (error) *error = [NSError errorWithDomain:@"apple-buddy" code:1 userInfo:@{NSLocalizedDescriptionKey:@"Cannot decode document image"}];
         return nil;
     }
     if (CGImageGetWidth(pixels) <= 2 || CGImageGetHeight(pixels) <= 2) return @"";
@@ -116,7 +116,7 @@ NSString *NBReadDocumentText(NSURL *url, NSError **error) {
     if ([url.pathExtension.lowercaseString isEqualToString:@"pdf"]) {
         PDFDocument *document = [[PDFDocument alloc] initWithURL:url];
         if (!document || document.isLocked) {
-            if (error) *error = [NSError errorWithDomain:@"notes-buddy" code:1 userInfo:@{NSLocalizedDescriptionKey:@"Cannot read PDF or PDF is locked"}];
+            if (error) *error = [NSError errorWithDomain:@"apple-buddy" code:1 userInfo:@{NSLocalizedDescriptionKey:@"Cannot read PDF or PDF is locked"}];
             return nil;
         }
         NSMutableArray *pages = [NSMutableArray array];
@@ -207,7 +207,7 @@ NSString *NBReadDocumentText(NSURL *url, NSError **error) {
 }
 
 static NSError *NBError(NSString *message) {
-    return [NSError errorWithDomain:@"notes-buddy" code:1 userInfo:@{NSLocalizedDescriptionKey:message}];
+    return [NSError errorWithDomain:@"apple-buddy" code:1 userInfo:@{NSLocalizedDescriptionKey:message}];
 }
 
 static void NBRequire(BOOL valid, NSString *message) {
@@ -256,12 +256,13 @@ static void NBRequire(BOOL valid, NSString *message) {
         if (![stores addPersistentStoreWithType:NSSQLiteStoreType configuration:nil URL:url options:options error:error]) return nil;
         _context = [[NSManagedObjectContext alloc] initWithConcurrencyType:NSMainQueueConcurrencyType];
         _context.persistentStoreCoordinator = stores;
-        _context.transactionAuthor = @"notes-buddy";
+        _context.transactionAuthor = @"apple-buddy";
         _context.mergePolicy = NSErrorMergePolicy;
         _readOnly = readOnly;
         _documentIndexURL = _liveStore
-            ? [NSURL fileURLWithPath:[NSHomeDirectory() stringByAppendingPathComponent:@"Library/Caches/notes-buddy/documents-v1"]]
+            ? [NSURL fileURLWithPath:[NSHomeDirectory() stringByAppendingPathComponent:@"Library/Caches/apple-buddy/documents-v1"]]
             : [url.URLByDeletingLastPathComponent URLByAppendingPathComponent:@"documents-v1"];
+        if (_liveStore) [NSFileManager.defaultManager removeItemAtPath:[NSHomeDirectory() stringByAppendingPathComponent:@"Library/Caches/notes-buddy"] error:nil];
         return self;
     } @catch (NSException *exception) {
         if (error) *error = NBError(exception.reason);
@@ -372,7 +373,7 @@ static void NBRequire(BOOL valid, NSString *message) {
         NBRequire(![[object valueForKey:@"isSharedViaICloud"] boolValue], @"Shared objects cannot be changed");
     }
     for (NSManagedObject *object in changed) {
-        if ([object isKindOfClass:NSClassFromString(@"ICCloudSyncingObject")] && !object.isDeleted) [object updateChangeCountWithReason:@"notes-buddy"];
+        if ([object isKindOfClass:NSClassFromString(@"ICCloudSyncingObject")] && !object.isDeleted) [object updateChangeCountWithReason:@"apple-buddy"];
     }
     if ([_context save:error]) { [_context reset]; return YES; }
     [_context rollback];
@@ -450,7 +451,7 @@ static void NBRequire(BOOL valid, NSString *message) {
         BOOL changed = NO;
         for (NSManagedObject *object in objects) {
             if ([object isKindOfClass:NSClassFromString(@"ICCloudSyncingObject")] && [[object valueForKey:@"isInICloudAccount"] boolValue] && ![[object valueForKey:@"markedForDeletion"] boolValue] && ![[object valueForKey:@"isInCloud"] boolValue] && ![[object valueForKey:@"needsToBePushedToCloud"] boolValue]) {
-                [object updateChangeCountWithReason:@"notes-buddy import"];
+                [object updateChangeCountWithReason:@"apple-buddy import"];
                 changed = YES;
             }
         }
@@ -489,7 +490,7 @@ static void NBRequire(BOOL valid, NSString *message) {
                 NSMutableArray *paths = [NSMutableArray array];
                 for (NSManagedObject *folder in matches) [paths addObject:[self folderPath:folder]];
                 BOOL distinct = [NSSet setWithArray:paths].count == paths.count;
-                NBRequire(NO, [NSString stringWithFormat:@"Folder name is ambiguous: %@. Use a %@", reference, distinct ? [@"path: " stringByAppendingString:[[paths sortedArrayUsingSelector:@selector(compare:)] componentsJoinedByString:@", "]] : @"UUID from nb folders"]);
+                NBRequire(NO, [NSString stringWithFormat:@"Folder name is ambiguous: %@. Use a %@", reference, distinct ? [@"path: " stringByAppendingString:[[paths sortedArrayUsingSelector:@selector(compare:)] componentsJoinedByString:@", "]] : @"UUID from abdy notes folders"]);
             }
         }
     }
@@ -944,10 +945,10 @@ static void NBRequire(BOOL valid, NSString *message) {
         if ([self objectsOfEntity:other withUUIDPrefix:reference].count) NBRequire(NO, [NSString stringWithFormat:@"%@ is %@, %@ is required", reference, kinds[other], kinds[entity]]);
     }
     NSDictionary *messages = @{
-        @"ICNote":@"Note not found: %@. Use a UUID or its prefix of at least 8 characters from nb ls or nb search",
-        @"ICFolder":@"Folder not found: %@. Use a name, a path such as Work/Project or a UUID from nb folders",
-        @"ICAttachment":@"Attachment not found in this note: %@. Use a file name or a UUID from nb attachments ls",
-        @"ICInlineAttachment":@"Link not found in this note: %@. Use a UUID from nb links ls"};
+        @"ICNote":@"Note not found: %@. Use a UUID or its prefix of at least 8 characters from abdy notes ls or abdy notes search",
+        @"ICFolder":@"Folder not found: %@. Use a name, a path such as Work/Project or a UUID from abdy notes folders",
+        @"ICAttachment":@"Attachment not found in this note: %@. Use a file name or a UUID from abdy notes attachments ls",
+        @"ICInlineAttachment":@"Link not found in this note: %@. Use a UUID from abdy notes links ls"};
     NBRequire(NO, [NSString stringWithFormat:messages[entity], reference]);
 }
 
@@ -1205,7 +1206,7 @@ static void NBRequire(BOOL valid, NSString *message) {
         if ([[attachment fileURL].lastPathComponent isEqualToString:identifier]) [named addObject:attachment];
     }
     NSArray<NSManagedObject *> *matches = identified.count ? identified : named;
-    NBRequire(matches.count < 2, [NSString stringWithFormat:@"Attachment reference is ambiguous: %@. Use a UUID from nb attachments ls", identifier]);
+    NBRequire(matches.count < 2, [NSString stringWithFormat:@"Attachment reference is ambiguous: %@. Use a UUID from abdy notes attachments ls", identifier]);
     if (!matches.count) [self rejectReference:identifier entity:@"ICAttachment"];
     return matches.firstObject;
 }

@@ -1,12 +1,13 @@
 ![Command help](assets/screenshots/help.png)
 
-# notes-buddy
+# apple-buddy
 
-Read, search, edit and organize Apple Notes from the terminal.
-The executable is named `nb`.
-Uses this Mac's existing Notes account. No separate login or AppleScript.
+Read, search, edit and organize Apple Notes from the terminal. Reminders and Calendar commands are in progress.
+The executable is named `abdy`. Notes commands live under `abdy notes`.
+`nb` is an alias: `nb ls` runs `abdy notes ls`, so existing scripts keep working.
+Uses this Mac's existing accounts. No separate login or AppleScript.
 
-Writes save locally and return at once. Run `nb sync` once after the last write: Notes runs hidden during synchronization and exits afterward.
+Writes save locally and return at once. Run `abdy notes sync` once after the last write: Notes runs hidden during synchronization and exits afterward.
 
 ## Install
 
@@ -14,71 +15,44 @@ Requires macOS, Apple Notes, Homebrew and Apple's Command Line Tools.
 Install from our own tap, not Homebrew Core:
 
 ```sh
-brew tap noma4i/notes-buddy https://github.com/noma4i/notes-buddy.git
-brew install noma4i/notes-buddy/nb
+brew tap noma4i/apple-buddy https://github.com/noma4i/apple-buddy.git
+brew install noma4i/apple-buddy/abdy
 ```
 
-Homebrew builds the CLI on your Mac. Update it with:
+Homebrew builds the CLI on your Mac and installs `abdy` with the `nb` alias. Update it with:
 
 ```sh
 brew update
-brew upgrade noma4i/notes-buddy/nb
+brew upgrade noma4i/apple-buddy/abdy
 ```
 
+If you installed the old tap, remove it first: `brew uninstall nb && brew untap noma4i/notes-buddy`.
 While the repository is private, your Git credentials need repository access.
 With GitHub CLI, configure them using `gh auth login` and `gh auth setup-git`.
 GitHub installation becomes available after the tap changes are pushed and their workflow finishes.
 
-## Start here
-
-```sh
-nb help
-nb version
-nb search "invoice"
-```
-
-Search prints 1 note UUID per line. For example:
-
-```text
-4B34F396-8895-4AC0-B593-28A8C5DD3521
-```
-
-Copy an ID from your results, or use its unique prefix of at least 8 characters:
-
-```sh
-nb show 4B34F396
-nb show 4B34F396 --json
-nb open 4B34F396
-```
-
-This example ID is fictional. Your ID will differ.
-IDs do not contain local database addresses or row numbers. System folder UUIDs derive from their account and system name.
-Ambiguous prefixes fail. Add more characters instead of guessing.
-`show` includes tables, tags, links and attachment access. JSON also includes formatting and native object details.
-`show --html` prints only HTML. `show --html --json` includes HTML and the same object metadata.
-`open` shows the selected note in Apple Notes and leaves the app running. JSON readers also return its `applenotes://` URL.
-
 ## Connect an AI agent
 
-Start the built-in MCP server with `nb mcp`. Add this entry to your agent's MCP config:
+Start the built-in MCP server with `abdy mcp`. Add this entry to your agent's MCP config:
 
 ```json
 {
   "mcpServers": {
-    "notes-buddy": {
-      "command": "/absolute/path/to/nb",
+    "apple-buddy": {
+      "command": "/absolute/path/to/abdy",
       "args": ["mcp"]
     }
   }
 }
 ```
 
-Use `command -v nb` to find the executable path. The agent starts and stops the server.
+Use `command -v abdy` to find the executable path. The agent starts and stops the server.
 Tools cover the CLI commands, including search, folders, pin, attachments, backup and restore.
-Each tool describes its parameters. Names use underscores, for example `attachments_export` and `table_set`.
+Each tool describes its parameters. Names are the command path with underscores, for example `notes_search`, `notes_attachments_export` and `notes_table_set`.
+Calls with the old flat names such as `search` or `attachments_export` still work.
 Call `help` with a tool name for full command help. Results contain structured JSON and the same data as the CLI.
 Set `html` or `csv` to `-` and pass text in `stdin` to avoid creating input files.
-Requests run one at a time. Writes save locally, the `sync` tool sends them to iCloud. Only `open` displays Notes.
+Requests run one at a time. Writes save locally, the `notes_sync` tool sends them to iCloud. Only `notes_open` displays Notes.
 Stdio needs no port, token, Node.js or separate server executable.
 
 ## Try editing
@@ -87,15 +61,15 @@ To try editing, create a disposable note in a new folder.
 The variable `note` saves the UUID returned by `new`. `"$note"` reads that saved ID in later commands.
 
 ```sh
-nb mkfolder "CLI Demo"
-note=$(nb new --folder "CLI Demo" --title "Project plan")
-nb insert "$note" --text "Draft budget"
-nb edit "$note" --find "Draft" --with "Final"
-nb show "$note"
-nb sync
+abdy notes mkfolder "CLI Demo"
+note=$(abdy notes new --folder "CLI Demo" --title "Project plan")
+abdy notes insert "$note" --text "Draft budget"
+abdy notes edit "$note" --find "Draft" --with "Final"
+abdy notes show "$note"
+abdy notes sync
 ```
 
-Check each exit code before continuing. Writes exit 0 after the local save and print `run nb sync` to stderr.
+Check each exit code before continuing. Writes exit 0 after the local save and print `run abdy notes sync` to stderr.
 A failed `sync` keeps the local writes. Inspect saved state and retry `sync`, not `new`.
 
 ## Commands
@@ -103,9 +77,9 @@ A failed `sync` keeps the local writes. Inspect saved state and retry `sync`, no
 Put `help` immediately after any command or action. Everything after it is ignored. Help never opens the database.
 
 ```sh
-nb search help
-nb table set help
-nb attachments export help
+abdy notes search help
+abdy notes table set help
+abdy notes attachments export help
 ```
 
 | Task | Commands |
@@ -132,7 +106,7 @@ nb attachments export help
 | Sync or check status | `sync`, `sync --status` |
 | Connect agents | `mcp` |
 
-Every reference that `nb` prints is accepted as input.
+Every reference that `abdy` prints is accepted as input.
 A note is selected by UUID, unique prefix or its `applenotes://` URL.
 A folder is selected by UUID, unique prefix, path such as `Work/Project` or name. Names and paths ignore case.
 An exact path wins over a name. Use a path or UUID when several folders share a name.
@@ -143,18 +117,18 @@ Moves preserve note IDs and contents. `rm` moves notes to Recently Deleted.
 ## Bulk changes
 
 ```sh
-nb ls --folder Inbox | nb mv - --folder Archive
-nb rm <id> <id>
-nb mvfolder Work/Old --parent Archive
-nb renamefolder Archive/Old --name "Old projects"
-nb rmfolder Archive --empty
-nb tags
-nb tags <id> <id> --add review
-nb tags --remove draft
-nb tags --rename draft --to review
-nb dups --folder Work
-nb folders --tree
-nb ls --folder Work --long --no-recursive
+abdy notes ls --folder Inbox | abdy notes mv - --folder Archive
+abdy notes rm <id> <id>
+abdy notes mvfolder Work/Old --parent Archive
+abdy notes renamefolder Archive/Old --name "Old projects"
+abdy notes rmfolder Archive --empty
+abdy notes tags
+abdy notes tags <id> <id> --add review
+abdy notes tags --remove draft
+abdy notes tags --rename draft --to review
+abdy notes dups --folder Work
+abdy notes folders --tree
+abdy notes ls --folder Work --long --no-recursive
 ```
 
 A batch is checked before any change and saved once: 1 refusal cancels the whole batch.
@@ -167,24 +141,24 @@ A batch is checked before any change and saved once: 1 refusal cancels the whole
 `sync` reports `sentObjects` and `seconds`, and prints `Sent N objects in T s` to stderr.
 `rmfolder` accepts only empty folders without subfolders.
 
-Pin a note with `nb pin "$note"`. Remove its pin with `nb unpin "$note"`.
+Pin a note with `abdy notes pin "$note"`. Remove its pin with `abdy notes unpin "$note"`.
 Both commands read the pin again after synchronization. If iCloud overwrote it, they write it again up to 3 times, then return an error.
 Repeated commands keep the requested state. Both sync on their own, the pin state lives in iCloud, and preserve note contents.
-Use `nb inspect "$note" --json` to read the `pinned` field.
+Use `abdy notes inspect "$note" --json` to read the `pinned` field.
 
 ## Folder statistics
 
 ```sh
-nb stats
-nb stats --folder Work --json
-nb folders --json
+abdy notes stats
+abdy notes stats --folder Work --json
+abdy notes folders --json
 ```
 
 Folder data includes its UUID, path, active notes, deleted notes, direct subfolders and `empty`.
 `--folder` in `stats`, `ls` and `search` includes subfolders. Counts of 1 folder are direct.
 `stats` totals sum the listed folders without counting a note twice. In JSON they are `totalNoteCount` and `totalDeletedNoteCount`.
 `ls`, `search` and `stats` read the same set of notes. Notes that iCloud has not downloaded yet are left out.
-Deleted notes are listed only by `nb ls --folder "Recently Deleted"`.
+Deleted notes are listed only by `abdy notes ls --folder "Recently Deleted"`.
 A folder is empty only when it has no notes, deleted notes or subfolders.
 
 ## Search
@@ -195,13 +169,13 @@ Numbers, IDs and punctuation stay literal. Deleted notes are excluded.
 Locked notes are listed by `ls` but not searched. `search` prints their number to stderr and returns it as `skippedProtected`.
 
 ```sh
-nb search "wekend" --field title
-nb search "Invoice number" --field document
-nb search "report.pdf" --field attachment
-nb search "budget" --folder Work --limit 20 --offset 20
-nb search invoice --show --limit 5
-nb ls --folder Work --show --chars 2000 --json
-nb ls --tag invoices
+abdy notes search "wekend" --field title
+abdy notes search "Invoice number" --field document
+abdy notes search "report.pdf" --field attachment
+abdy notes search "budget" --folder Work --limit 20 --offset 20
+abdy notes search invoice --show --limit 5
+abdy notes ls --folder Work --show --chars 2000 --json
+abdy notes ls --tag invoices
 ```
 
 `--show` in `search` and `ls` prints each note in full in 1 call: UUID, title, folder, date, matched fields and the `show` text.
@@ -212,23 +186,23 @@ With `--json`, `--show` adds the `show` fields without `runs`: `text`, `textLeng
 `link` finds links between notes, `url` finds web addresses. `id` matches exactly. `ls --tag` matches the exact tag, `--field tag` is fuzzy.
 Text search includes table cells. Attachment search finds filenames. Document search reads PDFs and images locally.
 Up to 4 files are indexed in parallel. Later searches reuse extracted text until a file changes.
-The private index lives in `~/Library/Caches/notes-buddy/documents-v1`. Search never launches Notes or changes its database.
+The private index lives in `~/Library/Caches/apple-buddy/documents-v1`. Search never launches Notes or changes its database.
 JSON includes `scannedDocuments`, `cachedDocuments` and document errors. Images of 2 pixels or less have no searchable text.
 Missing files and extraction errors are reported. OCR does not modify Notes.
 Malformed PDFs can produce a macOS decoding warning during first indexing.
 `ls --json`, `search --json`, `show --json` and `inspect --json` describe a note with the same fields:
 `id`, `url`, `title`, `folder`, `folderPath`, `modified`, `pinned`, `protected`, `shared`, `tags`, `attachments` and `urls`.
-`shared` notes (iCloud collaboration) and `protected` notes cannot be changed by `nb`. A refusal names the note, its state and the action, for example `Note <UUID> is shared and cannot be moved`.
+`shared` notes (iCloud collaboration) and `protected` notes cannot be changed by `abdy`. A refusal names the note, its state and the action, for example `Note <UUID> is shared and cannot be moved`.
 `folder` contains a folder UUID, `folderPath` its readable path. A field without a value is omitted.
 `table ls --json` returns `{id, tables}` with the table number for `--table`.
 
 ## Files, tags and links
 
 ```sh
-nb attachments add "$note" --file report.pdf
-nb attachments ls "$note" --json
-nb attachments export "$note" --directory ./saved-files
-nb tags "$note" --add 'invoices/tech,review'
+abdy notes attachments add "$note" --file report.pdf
+abdy notes attachments ls "$note" --json
+abdy notes attachments export "$note" --directory ./saved-files
+abdy notes tags "$note" --add 'invoices/tech,review'
 ```
 
 Export saves local files without changing the note. It checks the whole batch and never overwrites existing files.
@@ -254,9 +228,9 @@ HTML rewrites refuse objects or checklists they could lose.
 Requires `pandoc`, defaulting to `/opt/homebrew/bin/pandoc`. Override with `--pandoc`.
 
 ```sh
-nb import-bear --dry-run
-nb import-bear --limit 3
-nb import-bear
+abdy notes import-bear --dry-run
+abdy notes import-bear --limit 3
+abdy notes import-bear
 ```
 
 Import reads Bear without modifying it. Tag paths create folders. Files, native tags and cross-references are preserved.
@@ -267,7 +241,7 @@ Earlier notes can remain saved if a later import fails. Keep stderr and the JSON
 ## Output and safety
 
 Every command except `mcp` accepts `--json` for data. Help and errors always remain text.
-`nb version` and `nb --version` print the release version. `nb version --json` returns its name and version.
+`abdy version` and `abdy --version` print the release version. `abdy version --json` returns its name and version.
 Invalid commands return a nonzero exit code and a help hint. Synchronization failures do not hide saved local changes.
 
 | Default stdout | Commands |
@@ -297,8 +271,8 @@ They are not complete backups. Never restore a snapshot over a live iCloud datab
 ## Backup and isolated restore
 
 ```sh
-nb backup ./notes-backup --json
-nb restore ./notes-backup --to ./restored-notes --json
+abdy notes backup ./notes-backup --json
+abdy notes restore ./notes-backup --to ./restored-notes --json
 ```
 
 Backup copies the local database and files, including committed WAL data. It verifies file checksums and database integrity.

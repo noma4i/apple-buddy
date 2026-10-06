@@ -1,10 +1,10 @@
 sha = ARGV.first
 abort "Usage: update-homebrew.rb COMMIT_SHA" unless ARGV.length == 1 && sha.match?(/\A[0-9a-f]{40}\z/)
-source = File.read("Sources/notes-buddy/NotesBuddy.swift")
+source = File.read("Sources/apple-buddy/AppleBuddy.swift")
 releases = source.scan(/^    static let releaseVersion = "([0-9]+\.[0-9]+\.[0-9]+)"$/).flatten
 abort "Source must contain exactly 1 release version" unless releases.length == 1
 
-file = "Formula/nb.rb"
+file = "Formula/abdy.rb"
 content = File.read(file)
 revision = /revision: "[0-9a-f]{40}"/
 version = /^  version "[0-9]+\.[0-9]+\.[0-9]+"$/
